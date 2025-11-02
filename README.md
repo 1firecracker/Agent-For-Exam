@@ -67,24 +67,43 @@ cd frontend
 npm install
 ```
 
-### 4. 配置环境变量（可选）
+### 4. 配置环境变量（必需）
 
-在 `backend/` 目录下创建 `.env` 文件（如果不存在）：
+**重要**：`LLM_BINDING_API_KEY` 是必需的，请配置环境变量。
+
+在 `backend/` 目录下创建 `.env` 文件：
+
+```bash
+# Windows CMD
+cd backend
+copy .env.example .env
+
+# Windows PowerShell
+cd backend
+Copy-Item .env.example .env
+```
+
+然后编辑 `.env` 文件，填入真实的 API Key：
 
 ```env
-# LLM 配置
+# LLM 配置（必需）
 LLM_BINDING=openai
 LLM_MODEL=deepseek-ai/DeepSeek-R1-0528-Qwen3-8B
-LLM_BINDING_API_KEY=your-api-key
+LLM_BINDING_API_KEY=your-api-key-here  # ⚠️ 请替换为您的真实 API Key
 LLM_BINDING_HOST=https://api.siliconflow.cn/v1
 
-# 其他配置
+# 其他配置（可选，有默认值）
 MAX_ASYNC=2
 TIMEOUT=400
 IMAGE_RESOLUTION=150
 MAX_FILE_SIZE=52428800
 MAX_FILES_PER_CONVERSATION=20
 ```
+
+**注意**：
+- `.env` 文件不会被提交到 Git（已在 `.gitignore` 中）
+- 如果未配置 `.env`，应用将无法正常启动（API Key 必需）
+- 参考 `backend/.env.example` 查看所有可配置项
 
 ## 启动应用
 
