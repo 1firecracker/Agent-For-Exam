@@ -1,0 +1,136 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 虚拟环境
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv
+
+# Python IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 环境变量和配置
+.env
+.env.local
+.env.*.local
+*.log
+
+# Node.js / Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# 前端构建产物
+frontend/dist/
+frontend/.vite/
+frontend/dist-ssr/
+*.local
+
+# 后端数据文件（运行时生成）
+backend/data/
+backend/uploads/
+backend/*.json
+!backend/requirements.txt
+!backend/package.json
+!backend/package-lock.json
+
+# 图片缓存
+backend/uploads/image_cache/
+backend/uploads/conversations/
+backend/uploads/metadata/
+
+# 测试文件
+test_doc/
+*.test.py
+*.spec.py
+
+# 日志文件
+*.log
+logs/
+
+# 操作系统文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# 编辑器配置
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# 临时文件
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# 调试文件
+*.pdb
+*.pyc
+.chunk_analysis_*.json
+debug_*.py
+analyze_*.py
+test_*.py
+!test_doc/
+
+# 项目特定
+backend/chunk_analysis_*.json
+backend/debug_*.py
+backend/analyze_*.py
+backend/test_progress_*.py
+backend/error_analysis.md
+
+# 启动脚本（保留，但可以忽略某些调试脚本）
+# start_all.bat
+# start_all.ps1
+test_start_script.bat
+
+# LightRAG（保留核心代码，忽略编译文件）
+LightRAG/lightrag/__pycache__/
+LightRAG/lightrag/**/__pycache__/
+
+# 文档（保留主要文档，忽略临时文档）
+README_启动说明.md
+启动指南.md
+
