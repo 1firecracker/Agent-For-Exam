@@ -87,7 +87,7 @@ jobs:
         # 确保目录存在
         mkdir -p /opt/lightrag-web/backend
         # 创建 .env 文件
-        cat > /opt/lightrag-web/backend/.env << 'ENVEOF'
+        cat > /opt/lightrag-web/backend/.env << 'ENVEOF' | sed 's/^        //'
         LLM_BINDING=openai
         LLM_MODEL=deepseek-ai/DeepSeek-R1-0528-Qwen3-8B
         LLM_BINDING_API_KEY=${LLM_API_KEY}
