@@ -7,7 +7,7 @@ on:
   workflow_dispatch:  # 允许手动触发
 
 env:
-  AWS_REGION: us-east-1  # 修改为你的 AWS 区域
+  AWS_REGION: ap-northeast-1  # 东京区域
   EC2_INSTANCE_IP: ${{ secrets.EC2_INSTANCE_IP }}  # EC2 实例的公网 IP
   EC2_USER: ec2-user  # 根据你的 AMI 修改（Ubuntu 通常为 ubuntu，Amazon Linux 2023 为 ec2-user）
 
@@ -84,23 +84,32 @@ jobs:
         
         # 6. 设置环境变量
         echo "配置 .env 文件..."
+        # 确保目录存在
+        mkdir -p /opt/lightrag-web/backend
+        # 创建 .env 文件
         cat > /opt/lightrag-web/backend/.env << EOF
-        LLM_BINDING=openai
-        LLM_MODEL=deepseek-ai/DeepSeek-R1-0528-Qwen3-8B
-        LLM_BINDING_API_KEY=${LLM_API_KEY}
-        LLM_BINDING_HOST=https://api.siliconflow.cn/v1
-        EMBEDDING_BINDING=siliconcloud
-        EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B
-        EMBEDDING_DIM=1024
-        EMBEDDING_BINDING_HOST=http://localhost:11434
-        MAX_ASYNC=2
-        TIMEOUT=400
-        IMAGE_RESOLUTION=150
-        MAX_FILE_SIZE=52428800
-        MAX_FILES_PER_CONVERSATION=20
-        EOF
-        chmod 600 /opt/lightrag-web/backend/.env
-        echo "✅ .env 文件已配置（API Key 已从 GitHub Secrets 读取）"
+LLM_BINDING=openai
+LLM_MODEL=deepseek-ai/DeepSeek-R1-0528-Qwen3-8B
+LLM_BINDING_API_KEY=${LLM_API_KEY}
+LLM_BINDING_HOST=https://api.siliconflow.cn/v1
+EMBEDDING_BINDING=siliconcloud
+EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B
+EMBEDDING_DIM=1024
+EMBEDDING_BINDING_HOST=http://localhost:11434
+MAX_ASYNC=2
+TIMEOUT=400
+IMAGE_RESOLUTION=150
+MAX_FILE_SIZE=52428800
+MAX_FILES_PER_CONVERSATION=20
+EOF
+        # 检查文件是否创建成功
+        if [ -f "/opt/lightrag-web/backend/.env" ]; then
+          chmod 600 /opt/lightrag-web/backend/.env
+          echo "✅ .env 文件已配置（API Key 已从 GitHub Secrets 读取）"
+        else
+          echo "❌ 错误: .env 文件创建失败"
+          exit 1
+        fi
         
         # 7. 安装前端依赖（如果需要）
         cd /opt/lightrag-web/frontend
