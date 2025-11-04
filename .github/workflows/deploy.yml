@@ -70,10 +70,29 @@ jobs:
         # 4. 创建 Python 虚拟环境
         echo "设置 Python 环境..."
         cd /opt/lightrag-web/backend
-        python3 -m venv venv
+        # 检查并安装 Python 3.10+（如果不存在）
+        if ! command -v python3.10 &> /dev/null && ! command -v python3.11 &> /dev/null && ! command -v python3.12 &> /dev/null; then
+          echo "安装 Python 3.10+..."
+          sudo dnf install -y python3.10 python3.10-pip python3.10-devel || sudo yum install -y python3.10 python3.10-pip python3.10-devel || {
+            echo "尝试使用 pyenv 安装 Python 3.10..."
+            curl https://pyenv.run | bash
+            export PYENV_ROOT="$HOME/.pyenv"
+            export PATH="$PYENV_ROOT/bin:$PATH"
+            eval "$(pyenv init -)"
+            pyenv install 3.10.12
+            pyenv global 3.10.12
+          }
+        fi
+        # 使用 Python 3.10+ 创建虚拟环境
+        PYTHON_CMD=$(command -v python3.12 || command -v python3.11 || command -v python3.10 || command -v python3.9 || command -v python3)
+        echo "使用 Python: $PYTHON_CMD"
+        $PYTHON_CMD --version
+        $PYTHON_CMD -m venv venv
         source venv/bin/activate
         pip install --upgrade pip
         pip install -r requirements.txt
+        # 安装 LightRAG 为可编辑包
+        pip install -e /opt/lightrag-web/LightRAG
         
         # 5. 创建必要的目录
         mkdir -p /opt/lightrag-web/backend/uploads
