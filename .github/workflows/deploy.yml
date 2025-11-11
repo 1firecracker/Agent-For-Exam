@@ -124,6 +124,12 @@ jobs:
         IMAGE_RESOLUTION=150
         MAX_FILE_SIZE=52428800
         MAX_FILES_PER_CONVERSATION=20
+        ENABLE_GITEE_OCR=${ENABLE_GITEE_OCR:-true}
+        GITEE_OCR_TOKEN=${GITEE_OCR_TOKEN:-}
+        GITEE_OCR_TIMEOUT=30
+        GITEE_OCR_MAX_RETRY=2
+        GITEE_OCR_POLL_INTERVAL=5
+        GITEE_OCR_MAX_WAIT=60
         ENVEOF
         # 检查文件是否创建成功
         if [ -f "/opt/lightrag-web/backend/.env" ]; then
@@ -227,5 +233,7 @@ jobs:
           [ -f "deploy.sh" ] || { echo "错误: deploy.sh 不存在"; ls -la; exit 1; }
           chmod +x deploy.sh
           export LLM_API_KEY="${{ secrets.LLM_BINDING_API_KEY }}"
+          export ENABLE_GITEE_OCR="${{ secrets.ENABLE_GITEE_OCR || 'true' }}"
+          export GITEE_OCR_TOKEN="${{ secrets.GITEE_OCR_TOKEN || '' }}"
           ./deploy.sh
 

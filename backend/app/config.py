@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     max_samples_per_conversation: int = 50  # 每个对话最多样本试题数
 
     # 外部 PaddleOCR（Gitee）配置
-    enable_gitee_ocr: bool = False
+    enable_gitee_ocr: bool = True
     gitee_ocr_token: str = ""
     gitee_ocr_timeout: int = 30
     gitee_ocr_max_retry: int = 2
