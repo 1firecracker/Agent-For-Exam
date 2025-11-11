@@ -17,6 +17,13 @@
         >
           知识图谱
         </el-button>
+        <el-button
+          :type="viewMode === 'exercise' ? 'primary' : 'default'"
+          :icon="EditPen"
+          @click="viewMode = 'exercise'"
+        >
+          Agent试题模拟
+        </el-button>
       </el-button-group>
     </div>
     
@@ -36,8 +43,18 @@
       </div>
       
       <!-- 知识图谱视图 -->
-      <div v-else class="graph-view">
+      <div v-else-if="viewMode === 'graph'" class="graph-view">
         <GraphViewer v-if="convStore.currentConversationId" />
+        <el-empty
+          v-else
+          description="请先选择或创建一个对话"
+          :image-size="120"
+        />
+      </div>
+      
+      <!-- Agent试题模拟视图 -->
+      <div v-else-if="viewMode === 'exercise'" class="exercise-view">
+        <ExerciseViewer v-if="convStore.currentConversationId" />
         <el-empty
           v-else
           description="请先选择或创建一个对话"
@@ -50,10 +67,11 @@
 
 <script setup>
 import { ref, watch } from 'vue'
-import { Document, Connection } from '@element-plus/icons-vue'
+import { Document, Connection, EditPen } from '@element-plus/icons-vue'
 import { useConversationStore } from '../../stores/conversationStore'
 import PPTViewer from '../PPTViewer/PPTViewer.vue'
 import GraphViewer from '../GraphViewer/GraphViewer.vue'
+import ExerciseViewer from '../ExerciseViewer/ExerciseViewer.vue'
 
 const emit = defineEmits(['view-mode-change'])
 
@@ -65,7 +83,7 @@ const props = defineProps({
 })
 
 const convStore = useConversationStore()
-const viewMode = ref('ppt') // 'ppt' 或 'graph'
+const viewMode = ref('ppt') // 'ppt'、'graph' 或 'exercise'
 
 // 通知父组件视图模式变化
 watch(viewMode, (newMode) => {
@@ -103,7 +121,8 @@ watch(() => props.currentDocumentId, (newDocId) => {
 }
 
 .ppt-view,
-.graph-view {
+.graph-view,
+.exercise-view {
   width: 100%;
   height: 100%;
   overflow: hidden;

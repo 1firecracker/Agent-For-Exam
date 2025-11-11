@@ -1,5 +1,9 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings
 from typing import List
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
 
 class Settings(BaseSettings):
     """应用配置"""
@@ -31,23 +35,37 @@ class Settings(BaseSettings):
     embedding_binding_host: str = "http://localhost:11434"
     
     # 文件上传配置
-    upload_dir: str = "./uploads"
+    upload_dir: str = str(BASE_DIR / "uploads")
     max_file_size: int = 52428800  # 50MB
     allowed_extensions: List[str] = ["pptx", "ppt", "pdf"]
     max_files_per_conversation: int = 20  # 每个对话最多文件数
     
     # 对话和元数据存储配置
-    conversations_metadata_dir: str = "./uploads/metadata"
-    conversations_dir: str = "./uploads/conversations"
+    conversations_metadata_dir: str = str(BASE_DIR / "uploads/metadata")
+    conversations_dir: str = str(BASE_DIR / "uploads/conversations")
     
     # 图片渲染配置
-    image_cache_dir: str = "./uploads/image_cache"
+    image_cache_dir: str = str(BASE_DIR / "uploads/image_cache")
     image_resolution: int = 150  # DPI
     image_cache_expiry_hours: int = 24  # 缓存过期时间（小时）
     enable_image_cache: bool = True  # 是否启用图片缓存
+    
+    # 样本试题配置
+    exercises_dir: str = str(BASE_DIR / "uploads/exercises")
+    exercise_allowed_extensions: List[str] = ["pdf", "docx", "txt"]  # 样本试题支持的文件类型
+    max_samples_per_conversation: int = 50  # 每个对话最多样本试题数
+
+    # 外部 PaddleOCR（Gitee）配置
+    enable_gitee_ocr: bool = False
+    gitee_ocr_token: str = ""
+    gitee_ocr_timeout: int = 30
+    gitee_ocr_max_retry: int = 2
+    gitee_ocr_poll_interval: int = 5
+    gitee_ocr_max_wait: int = 60  # 秒，轮询总等待时长
 
     class Config:
-        env_file = ".env"
+        env_file = str(Path(__file__).resolve().parent.parent / ".env")
         case_sensitive = False
+        extra = "ignore"
 
 settings = Settings()

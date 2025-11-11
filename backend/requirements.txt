@@ -7,6 +7,10 @@ python-multipart==0.0.6
 pydantic-settings==2.1.0
 python-dotenv==1.0.0
 
+# HTTP 客户端
+requests>=2.31.0
+requests-toolbelt>=1.0.0
+
 # 异步文件操作
 aiofiles==23.2.1
 
@@ -31,6 +35,8 @@ pdfplumber==0.10.3
 pypdfium2>=5.0.0  # pdfplumber的to_image()功能需要此依赖
 PyPDF2==3.0.1
 Pillow>=9.0.0
+python-docx==1.1.0  # DOCX文档解析
+PyMuPDF>=1.23.0  # PDF图片提取（fitz模块）
 
 # 图片渲染依赖（Windows环境需要）
 comtypes>=1.1.14; sys_platform == 'win32'

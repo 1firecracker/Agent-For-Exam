@@ -131,12 +131,6 @@ MAX_FILES_PER_CONVERSATION=20
 
 ### 方式一：一键启动（推荐开发使用）
 
-**Windows:**
-```bash
-# 双击运行或在命令行执行
-start_all.bat
-```
-
 **PowerShell:**
 ```powershell
 .\start_all.ps1

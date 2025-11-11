@@ -30,6 +30,8 @@ ENV/
 env.bak/
 venv.bak/
 .venv
+.venv_*/
+venv_*/
 
 # Python IDE
 .vscode/
@@ -95,6 +97,7 @@ Desktop.ini
 # 编辑器配置
 .vscode/
 .idea/
+.cursor/
 *.sublime-project
 *.sublime-workspace
 
@@ -112,7 +115,6 @@ Desktop.ini
 debug_*.py
 analyze_*.py
 test_*.py
-!test_doc/
 
 # 项目特定
 backend/chunk_analysis_*.json

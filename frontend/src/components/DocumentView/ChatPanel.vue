@@ -18,6 +18,14 @@
         <!-- AI 回复 -->
         <div v-else class="message assistant-message">
           <div class="message-content">
+            <!-- Think 内容折叠栏（在顶部） -->
+            <div v-if="hasThinkContent(message.content)" class="think-section">
+              <el-collapse v-model="thinkCollapseStates[index]">
+                <el-collapse-item :name="index" :title="'Thinking Process'" class="think-collapse">
+                  <div class="think-content" v-html="formatThinkContent(message.content)"></div>
+                </el-collapse-item>
+              </el-collapse>
+            </div>
             <div class="message-text" v-html="formatMessageWithWarning(message.content)"></div>
             <div class="message-time">{{ formatTime(message.timestamp) }}</div>
           </div>
@@ -30,7 +38,7 @@
           <div class="message-text">
             <span v-if="currentStreamWarning" class="warning-text" v-html="formatMarkdown(currentStreamWarning)"></span>
             <span v-if="currentStreamWarning && currentStreamContent" v-html="formatMarkdown('\n\n')"></span>
-            <span v-html="formatMarkdown(currentStreamContent)"></span>
+            <span v-html="formatEnhancedMarkdown(currentStreamContent)"></span>
             <span class="streaming-cursor">|</span>
           </div>
         </div>
@@ -96,6 +104,7 @@ const selectedMode = ref('mix')
 const isStreaming = ref(false)
 const currentStreamContent = ref('')
 const currentStreamWarning = ref('')
+const thinkCollapseStates = ref({}) // 存储每个消息的折叠状态
 
 // 消息列表（从 chatStore 获取）
 const messages = computed(() => {
@@ -219,7 +228,188 @@ const formatTime = (timestamp) => {
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
 
-// 简单的 Markdown 格式化（基础版本）
+// 检查是否有 think 内容
+const hasThinkContent = (text) => {
+  if (!text) return false
+  return /<(?:think|redacted_reasoning)>[\s\S]*?<\/(?:think|redacted_reasoning)>/i.test(text)
+}
+
+// 提取并格式化 think 内容
+const formatThinkContent = (text) => {
+  if (!text) return ''
+  
+  // 支持 <think> 和 <think> 两种标签
+  const thinkMatch = text.match(/<(?:think|redacted_reasoning)>([\s\S]*?)<\/(?:think|redacted_reasoning)>/i)
+  if (!thinkMatch) return ''
+  
+  let thinkText = thinkMatch[1]
+  
+  // 转义 HTML
+  let html = thinkText
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+  
+  // 应用增强的 Markdown 格式化
+  html = formatEnhancedMarkdown(html)
+  
+  return html
+}
+
+// 格式化消息，识别警告提示并应用斜体样式，移除 think 标签
+const formatMessageWithWarning = (text) => {
+  if (!text) return ''
+  
+  // 先移除 think 标签（不在主内容中显示），支持两种标签格式
+  let content = text.replace(/<(?:think|redacted_reasoning)>[\s\S]*?<\/(?:think|redacted_reasoning)>/gi, '')
+  
+  // 先转义 HTML
+  let html = content
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+  
+  // 处理警告提示（以 ⚠️ 开头，到第一个换行或文本结束）
+  const warningPattern = /(⚠️[^：:]*[：:][^\n]*)/
+  html = html.replace(warningPattern, '<span class="warning-text">$1</span>')
+  
+  // 处理增强的 Markdown 格式
+  html = formatEnhancedMarkdown(html)
+  
+  return html
+}
+
+// 增强的 Markdown 格式化
+const formatEnhancedMarkdown = (text) => {
+  if (!text) return ''
+  
+  let html = text
+  
+  // 代码块（先处理，避免被其他规则影响）
+  html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
+  
+  // 标题（#### 到 #）
+  html = html.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>')
+  html = html.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
+  html = html.replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
+  html = html.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>')
+  
+  // 处理无序列表（- 开头）
+  // 按行处理，将连续的列表项组合（跳过已处理的HTML标签）
+  const lines = html.split('\n')
+  const processedLines = []
+  let inList = false
+  let listItems = []
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
+    // 跳过已处理的HTML标签（标题、代码块等）
+    if (line.startsWith('<') && (line.startsWith('<h') || line.startsWith('<pre') || line.startsWith('<code'))) {
+      if (inList) {
+        processedLines.push(`<ul>${listItems.map(item => `<li>${item}</li>`).join('')}</ul>`)
+        inList = false
+        listItems = []
+      }
+      processedLines.push(lines[i])
+      continue
+    }
+    
+    const listMatch = line.match(/^-\s+(.+)$/)
+    
+    if (listMatch) {
+      if (!inList) {
+        inList = true
+        listItems = []
+      }
+      listItems.push(listMatch[1])
+    } else {
+      if (inList) {
+        // 结束列表
+        processedLines.push(`<ul>${listItems.map(item => `<li>${item}</li>`).join('')}</ul>`)
+        inList = false
+        listItems = []
+      }
+      processedLines.push(lines[i])
+    }
+  }
+  
+  // 处理末尾的列表
+  if (inList && listItems.length > 0) {
+    processedLines.push(`<ul>${listItems.map(item => `<li>${item}</li>`).join('')}</ul>`)
+  }
+  
+  html = processedLines.join('\n')
+  
+  // 处理有序列表（数字. 开头）
+  const lines2 = html.split('\n')
+  const processedLines2 = []
+  let inOrderedList = false
+  let orderedListItems = []
+  
+  for (let i = 0; i < lines2.length; i++) {
+    const line = lines2[i].trim()
+    // 跳过已处理的HTML标签
+    if (line.startsWith('<') && (line.startsWith('<h') || line.startsWith('<pre') || line.startsWith('<code') || line.startsWith('<ul'))) {
+      if (inOrderedList) {
+        processedLines2.push(`<ol>${orderedListItems.map(item => `<li>${item}</li>`).join('')}</ol>`)
+        inOrderedList = false
+        orderedListItems = []
+      }
+      processedLines2.push(lines2[i])
+      continue
+    }
+    
+    const orderedMatch = line.match(/^\d+\.\s+(.+)$/)
+    
+    if (orderedMatch) {
+      if (!inOrderedList) {
+        inOrderedList = true
+        orderedListItems = []
+      }
+      orderedListItems.push(orderedMatch[1])
+    } else {
+      if (inOrderedList) {
+        // 结束列表
+        processedLines2.push(`<ol>${orderedListItems.map(item => `<li>${item}</li>`).join('')}</ol>`)
+        inOrderedList = false
+        orderedListItems = []
+      }
+      processedLines2.push(lines2[i])
+    }
+  }
+  
+  // 处理末尾的有序列表
+  if (inOrderedList && orderedListItems.length > 0) {
+    processedLines2.push(`<ol>${orderedListItems.map(item => `<li>${item}</li>`).join('')}</ol>`)
+  }
+  
+  html = processedLines2.join('\n')
+  
+  // 粗体
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+  
+  // 行内代码
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
+  
+  // 换行（但保留在代码块和列表中的换行）
+  // 先标记已处理的块
+  const blocks = []
+  html = html.replace(/(<pre>[\s\S]*?<\/pre>|<ul>[\s\S]*?<\/ul>|<ol>[\s\S]*?<\/ol>|<h[1-4]>.*?<\/h[1-4]>)/g, (match) => {
+    const id = `___BLOCK_${blocks.length}___`
+    blocks.push(match)
+    return id
+  })
+  // 处理剩余换行
+  html = html.replace(/\n/g, '<br>')
+  // 恢复块
+  blocks.forEach((block, index) => {
+    html = html.replace(`___BLOCK_${index}___`, block)
+  })
+  
+  return html
+}
+
+// 简单的 Markdown 格式化（基础版本，保留用于流式输出）
 const formatMarkdown = (text) => {
   if (!text) return ''
   
@@ -239,29 +429,6 @@ const formatMarkdown = (text) => {
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
   
   // 换行
-  html = html.replace(/\n/g, '<br>')
-  
-  return html
-}
-
-// 格式化消息，识别警告提示并应用斜体样式
-const formatMessageWithWarning = (text) => {
-  if (!text) return ''
-  
-  // 先转义 HTML
-  let html = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-  
-  // 处理警告提示（以 ⚠️ 开头，到第一个换行或文本结束）
-  const warningPattern = /(⚠️[^：:]*[：:][^\n]*)/
-  html = html.replace(warningPattern, '<span class="warning-text">$1</span>')
-  
-  // 处理其他 Markdown 格式
-  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-  html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
   html = html.replace(/\n/g, '<br>')
   
   return html
@@ -388,6 +555,94 @@ const formatMessageWithWarning = (text) => {
 .input-actions {
   display: flex;
   justify-content: flex-end;
+}
+
+/* Think 内容样式 */
+.think-section {
+  margin-top: 0;
+  margin-bottom: 5px;
+  border-bottom: 1px solid #e4e7ed;
+  border-radius: 6px;
+  background-color: #fafbfc;
+  padding: 3px 8px;
+}
+
+.think-collapse :deep(.el-collapse-item__header) {
+  font-size: 12px;
+  color: #909399;
+  padding: 3px 0;
+  height: auto;
+  line-height: 1.5;
+  border-radius: 4px;
+  background-color: transparent;
+}
+
+.think-collapse :deep(.el-collapse-item__content) {
+  padding: 0;
+  padding-bottom: 3px;
+}
+
+.think-content {
+  background-color: #f5f7fa;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #606266;
+  margin-top: 8px;
+}
+
+.think-content :deep(h1),
+.think-content :deep(h2),
+.think-content :deep(h3),
+.think-content :deep(h4) {
+  margin: 8px 0 4px 0;
+  font-weight: 600;
+  color: #303133;
+}
+
+.think-content :deep(h1) { font-size: 18px; }
+.think-content :deep(h2) { font-size: 16px; }
+.think-content :deep(h3) { font-size: 14px; }
+.think-content :deep(h4) { font-size: 13px; }
+
+.think-content :deep(ul),
+.think-content :deep(ol) {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+
+.think-content :deep(li) {
+  margin: 4px 0;
+}
+
+/* 主消息内容也支持增强的 Markdown */
+.message-text :deep(h1),
+.message-text :deep(h2),
+.message-text :deep(h3),
+.message-text :deep(h4) {
+  margin: 12px 0 6px 0;
+  font-weight: 600;
+}
+
+.message-text :deep(h1) { font-size: 20px; }
+.message-text :deep(h2) { font-size: 18px; }
+.message-text :deep(h3) { font-size: 16px; }
+.message-text :deep(h4) { font-size: 14px; }
+
+.message-text :deep(ul),
+.message-text :deep(ol) {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+
+.message-text :deep(li) {
+  margin: 4px 0;
+  list-style-type: disc;
+}
+
+.message-text :deep(ol li) {
+  list-style-type: decimal;
 }
 </style>
 

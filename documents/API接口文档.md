@@ -7,6 +7,7 @@
 - [文档管理 API](#文档管理-api)
 - [幻灯片相关 API](#幻灯片相关-api)
 - [知识图谱查询 API](#知识图谱查询-api)
+- [样本试题管理 API](#样本试题管理-api)
 - [错误处理](#错误处理)
 - [快速参考](#快速参考)
 
@@ -631,6 +632,230 @@ curl -X POST http://127.0.0.1:8000/api/conversations/{conversation_id}/query \
 
 ---
 
+## 样本试题管理 API
+
+### 1. 上传样本试题
+
+**接口**: `POST /api/conversations/{conversation_id}/exercises/samples/upload`
+
+**描述**: 上传一个或多个样本试题文件（PDF/DOCX/TXT格式），系统会自动解析文本和图片。
+
+**路径参数**:
+- `conversation_id`: 对话ID
+
+**请求格式**: `multipart/form-data`
+
+**请求字段**:
+- `files`: 文件列表（支持多文件上传）
+
+**限制**:
+- 每个对话最多 50 个样本
+- 单个文件最大 50MB
+- 支持格式: `.pdf`, `.docx`, `.txt`
+
+**响应** (201 Created):
+```json
+{
+  "conversation_id": "uuid-string",
+  "uploaded_samples": [
+    {
+      "sample_id": "final24",
+      "filename": "final24.pdf",
+      "file_size": 1024000,
+      "file_type": "pdf",
+      "text_length": 2567,
+      "image_count": 5,
+      "upload_time": "2024-01-01T00:00:00Z"
+    }
+  ],
+  "total_samples": 1
+}
+```
+
+**注意事项**:
+- 上传后立即解析文件，提取文本和图片
+- 解析结果保存在 `uploads/exercises/{conversation_id}/samples/{sample_id}/` 目录
+- 图片标记会嵌入到文本中，格式为 `[IMAGE: img_1.png]`
+
+**示例**:
+```bash
+curl -X POST http://127.0.0.1:8000/api/conversations/{conversation_id}/exercises/samples/upload \
+  -F "files=@final24.pdf" \
+  -F "files=@assignment1.docx"
+```
+
+**错误响应** (400 Bad Request):
+```json
+{
+  "detail": "不支持的文件类型: doc，仅支持 pdf, docx, txt"
+}
+```
+
+---
+
+### 2. 获取样本试题列表
+
+**接口**: `GET /api/conversations/{conversation_id}/exercises/samples`
+
+**描述**: 获取指定对话的所有样本试题列表，按上传时间倒序排列。
+
+**路径参数**:
+- `conversation_id`: 对话ID
+
+**响应** (200 OK):
+```json
+{
+  "samples": [
+    {
+      "sample_id": "final24",
+      "filename": "final24.pdf",
+      "file_type": "pdf",
+      "file_size": 1024000,
+      "text_length": 2567,
+      "image_count": 5,
+      "upload_time": "2024-01-01T00:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+**示例**:
+```bash
+curl http://127.0.0.1:8000/api/conversations/{conversation_id}/exercises/samples
+```
+
+---
+
+### 3. 获取样本试题详情
+
+**接口**: `GET /api/conversations/{conversation_id}/exercises/samples/{sample_id}`
+
+**描述**: 获取指定样本试题的详细信息，包括文本内容和图片列表。
+
+**路径参数**:
+- `conversation_id`: 对话ID
+- `sample_id`: 样本ID（通常是文件名去除扩展名）
+
+**响应** (200 OK):
+```json
+{
+  "sample_id": "final24",
+  "conversation_id": "uuid-string",
+  "filename": "final24.pdf",
+  "file_type": "pdf",
+  "file_size": 1024000,
+  "text_length": 2567,
+  "image_count": 5,
+  "upload_time": "2024-01-01T00:00:00Z",
+  "images": [
+    {
+      "page_number": 1,
+      "image_index": 1,
+      "file_path": "images/page_1_img_1.png",
+      "image_format": "png",
+      "width": 0,
+      "height": 0
+    }
+  ],
+  "text_content": "完整的文本内容，包含图片标记 [IMAGE: img_1.png]..."
+}
+```
+
+**错误响应** (404 Not Found):
+```json
+{
+  "detail": "样本试题 final24 不存在"
+}
+```
+
+**示例**:
+```bash
+curl http://127.0.0.1:8000/api/conversations/{conversation_id}/exercises/samples/final24
+```
+
+---
+
+### 4. 获取样本试题文本
+
+**接口**: `GET /api/conversations/{conversation_id}/exercises/samples/{sample_id}/text`
+
+**描述**: 仅获取样本试题的文本内容（不包含其他元数据）。
+
+**路径参数**:
+- `conversation_id`: 对话ID
+- `sample_id`: 样本ID
+
+**响应** (200 OK):
+```json
+{
+  "text": "完整的文本内容，包含图片标记 [IMAGE: img_1.png]..."
+}
+```
+
+**示例**:
+```bash
+curl http://127.0.0.1:8000/api/conversations/{conversation_id}/exercises/samples/final24/text
+```
+
+---
+
+### 5. 获取样本试题图片
+
+**接口**: `GET /api/conversations/{conversation_id}/exercises/samples/{sample_id}/images/{image_name}`
+
+**描述**: 获取样本试题中的指定图片文件。
+
+**路径参数**:
+- `conversation_id`: 对话ID
+- `sample_id`: 样本ID
+- `image_name`: 图片文件名（例如：`page_1_img_1.png`）
+
+**响应** (200 OK):
+- Content-Type: `image/png` 或 `image/jpeg` 等
+- 响应体: 图片二进制数据
+
+**错误响应** (404 Not Found):
+```json
+{
+  "detail": "图片 page_1_img_1.png 不存在"
+}
+```
+
+**示例**:
+```bash
+curl http://127.0.0.1:8000/api/conversations/{conversation_id}/exercises/samples/final24/images/page_1_img_1.png \
+  --output image.png
+```
+
+---
+
+### 6. 删除样本试题
+
+**接口**: `DELETE /api/conversations/{conversation_id}/exercises/samples/{sample_id}`
+
+**描述**: 删除指定样本试题及其所有相关文件（文本、图片等）。
+
+**路径参数**:
+- `conversation_id`: 对话ID
+- `sample_id`: 样本ID
+
+**响应** (204 No Content): 无响应体
+
+**错误响应** (404 Not Found):
+```json
+{
+  "detail": "样本试题 final24 不存在"
+}
+```
+
+**示例**:
+```bash
+curl -X DELETE http://127.0.0.1:8000/api/conversations/{conversation_id}/exercises/samples/final24
+```
+
+---
+
 ## 错误处理
 
 ### HTTP 状态码
@@ -731,6 +956,12 @@ curl -X POST http://127.0.0.1:8000/api/conversations/{conversation_id}/query \
 | 知识图谱 | GET | `/api/conversations/{id}/graph` | 获取所有实体和关系 |
 | 实体详情 | GET | `/api/conversations/{id}/graph/entities/{entity_id}` | 获取实体信息 |
 | 查询图谱 | POST | `/api/conversations/{id}/query` | 智能查询 |
+| 上传样本 | POST | `/api/conversations/{id}/exercises/samples/upload` | 上传样本试题 |
+| 样本列表 | GET | `/api/conversations/{id}/exercises/samples` | 获取样本列表 |
+| 样本详情 | GET | `/api/conversations/{id}/exercises/samples/{sample_id}` | 获取样本详情 |
+| 样本文本 | GET | `/api/conversations/{id}/exercises/samples/{sample_id}/text` | 获取样本文本 |
+| 样本图片 | GET | `/api/conversations/{id}/exercises/samples/{sample_id}/images/{image_name}` | 获取样本图片 |
+| 删除样本 | DELETE | `/api/conversations/{id}/exercises/samples/{sample_id}` | 删除样本 |
 
 ---
 
