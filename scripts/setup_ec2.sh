@@ -5,7 +5,7 @@
 
 set -e
 
-echo "=== LightRAG Web EC2 初始设置 ==="
+echo "=== Agent for Exam EC2 初始设置 ==="
 
 # 检测操作系统类型
 if [ -f /etc/os-release ]; then

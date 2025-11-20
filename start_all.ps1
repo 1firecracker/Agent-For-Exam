@@ -32,7 +32,7 @@ trap {
 }
 
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "启动 LightRAG Web 应用" -ForegroundColor Cyan
+Write-Host "启动 Agent for Exam" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 

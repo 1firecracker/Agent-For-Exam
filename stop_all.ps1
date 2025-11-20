@@ -1,7 +1,7 @@
 # 停止所有前后端服务器 (PowerShell版本)
 
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "停止 LightRAG Web 应用" -ForegroundColor Cyan
+Write-Host "停止 Agent for Exam" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
