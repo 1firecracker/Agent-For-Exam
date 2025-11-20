@@ -105,7 +105,7 @@ GITEE_OCR_TOKEN=your-gitee-ocr-token-here  # 必需：Gitee OCR Token
 # 获取方式：https://ai.gitee.com/serverless-api?model=PaddleOCR-VL
 
 # ==================== 其他配置（可选，有默认值）====================
-MAX_ASYNC=2
+MAX_ASYNC=2=16
 TIMEOUT=400
 IMAGE_RESOLUTION=150
 MAX_FILE_SIZE=52428800
