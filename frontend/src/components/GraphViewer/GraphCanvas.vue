@@ -7,7 +7,7 @@
       <el-button-group>
         <el-button :icon="ZoomIn" @click="handleZoomIn" size="small" title="放大" />
         <el-button :icon="ZoomOut" @click="handleZoomOut" size="small" title="缩小" />
-        <el-button @click="handleResetView" size="small" title="重置视图">重置</el-button>
+        <el-button :icon="FullScreen" @click="handleFullscreen" size="small" title="全屏显示">全屏</el-button>
         <el-button :icon="FullScreen" @click="handleFit" size="small" title="适应画布">适应</el-button>
       </el-button-group>
     </div>
@@ -59,9 +59,45 @@
       </div>
     </el-card>
     
+    <!-- 边详情面板 -->
+    <el-card 
+      v-if="selectedRelation" 
+      class="node-details-panel"
+      shadow="always"
+    >
+      <template #header>
+        <div class="panel-header">
+          <span>关系详情</span>
+          <el-button text @click="closeDetails" :icon="Close" />
+        </div>
+      </template>
+      <div v-if="relationDetails" class="details-content">
+        <div class="detail-item">
+          <label>源实体：</label>
+          <span>{{ relationDetails.source }}</span>
+        </div>
+        <div class="detail-item">
+          <label>目标实体：</label>
+          <span>{{ relationDetails.target }}</span>
+        </div>
+        <div class="detail-item">
+          <label>关系类型：</label>
+          <el-tag size="small">{{ relationDetails.type || '未知' }}</el-tag>
+        </div>
+        <div class="detail-item" v-if="relationDetails.description">
+          <label>描述：</label>
+          <p class="description-text">{{ relationDetails.description }}</p>
+        </div>
+      </div>
+      <div v-else class="loading-details">
+        <el-icon class="is-loading"><Loading /></el-icon>
+        <span>加载中...</span>
+      </div>
+    </el-card>
+    
     <!-- 空状态 -->
     <el-empty 
-      v-if="!loading && (!entities || entities.length === 0)" 
+      v-if="!loading && !cy && (!graphStore.entities || graphStore.entities.length === 0)" 
       description="暂无知识图谱数据"
       :image-size="120"
     />
@@ -95,13 +131,15 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['node-click', 'node-hover', 'doc-click'])
+const emit = defineEmits(['node-click', 'node-hover', 'edge-click', 'doc-click', 'fullscreen'])
 
 const cyContainer = ref(null)
 const cy = ref(null)
 const loading = ref(false)
 const selectedEntity = ref(null)
 const entityDetails = ref(null)
+const selectedRelation = ref(null)
+const relationDetails = ref(null)
 const graphStore = useGraphStore()
 
 // 计算节点连接度
@@ -399,8 +437,24 @@ const setupEvents = () => {
     
     if (entityData) {
       selectedEntity.value = entityData
+      selectedRelation.value = null
+      relationDetails.value = null
       loadEntityDetails(entityData.entity_id || entityData.name)
       emit('node-click', entityData)
+    }
+  })
+  
+  // 边点击
+  cy.value.on('tap', 'edge', (event) => {
+    const edge = event.target
+    const relationData = edge.data('relationData')
+    
+    if (relationData) {
+      selectedRelation.value = relationData
+      selectedEntity.value = null
+      entityDetails.value = null
+      loadRelationDetails(relationData.source, relationData.target)
+      emit('edge-click', relationData)
     }
   })
   
@@ -444,6 +498,8 @@ const setupEvents = () => {
       cy.value.elements().unselect()
       selectedEntity.value = null
       entityDetails.value = null
+      selectedRelation.value = null
+      relationDetails.value = null
     }
   })
 }
@@ -459,6 +515,20 @@ const setupEvents = () => {
       entityDetails.value = details
     } catch (error) {
       console.error('加载实体详情失败:', error)
+    }
+  }
+  
+  // 加载关系详情
+  const loadRelationDetails = async (source, target) => {
+    if (!props.conversationId || !source || !target) return
+    
+    relationDetails.value = null
+    
+    try {
+      const details = await graphStore.getRelation(props.conversationId, source, target)
+      relationDetails.value = details
+    } catch (error) {
+      console.error('加载关系详情失败:', error)
     }
   }
   
@@ -480,14 +550,8 @@ const handleZoomOut = () => {
   }
 }
 
-const handleResetView = () => {
-  if (cy.value) {
-    cy.value.elements().unselect()
-    cy.value.fit()
-    cy.value.center()
-    selectedEntity.value = null
-    entityDetails.value = null
-  }
+const handleFullscreen = () => {
+  emit('fullscreen')
 }
 
 const handleFit = () => {
@@ -499,6 +563,8 @@ const handleFit = () => {
 const closeDetails = () => {
   selectedEntity.value = null
   entityDetails.value = null
+  selectedRelation.value = null
+  relationDetails.value = null
   if (cy.value) {
     cy.value.elements().unselect()
   }

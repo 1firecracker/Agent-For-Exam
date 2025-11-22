@@ -20,7 +20,7 @@
           <div class="message-content">
             <!-- Think 内容折叠栏（在顶部） -->
             <div v-if="hasThinkContent(message.content)" class="think-section">
-              <el-collapse v-model="thinkCollapseStates[index]">
+              <el-collapse v-model="thinkCollapseStates">
                 <el-collapse-item :name="index" :title="'Thinking Process'" class="think-collapse">
                   <div class="think-content" v-html="formatThinkContent(message.content)"></div>
                 </el-collapse-item>
@@ -35,10 +35,18 @@
       <!-- 流式输出中显示加载 -->
       <div v-if="isStreaming" class="message assistant-message">
         <div class="message-content">
+          <!-- Think 内容折叠栏（在顶部） -->
+          <div v-if="hasStreamingThinkContent" class="think-section">
+            <el-collapse v-model="streamingThinkCollapse">
+              <el-collapse-item name="streaming" :title="'Thinking Process'" class="think-collapse">
+                <div class="think-content" v-html="formatThinkContent(currentStreamContent)"></div>
+              </el-collapse-item>
+            </el-collapse>
+          </div>
           <div class="message-text">
             <span v-if="currentStreamWarning" class="warning-text" v-html="formatMarkdown(currentStreamWarning)"></span>
             <span v-if="currentStreamWarning && currentStreamContent" v-html="formatMarkdown('\n\n')"></span>
-            <span v-html="formatEnhancedMarkdown(currentStreamContent)"></span>
+            <span v-html="formatMessageWithWarning(currentStreamContent)"></span>
             <span class="streaming-cursor">|</span>
           </div>
         </div>
@@ -104,12 +112,18 @@ const selectedMode = ref('naive')
 const isStreaming = ref(false)
 const currentStreamContent = ref('')
 const currentStreamWarning = ref('')
-const thinkCollapseStates = ref({}) // 存储每个消息的折叠状态
+const thinkCollapseStates = ref([]) // 存储展开的消息索引数组（el-collapse需要数组）
+const streamingThinkCollapse = ref([]) // 流式输出时的think折叠状态（默认折叠，空数组）
 
 // 消息列表（从 chatStore 获取）
 const messages = computed(() => {
   if (!convStore.currentConversationId) return []
   return chatStore.getMessages(convStore.currentConversationId)
+})
+
+// 计算属性：流式输出时是否有think内容（确保响应式更新）
+const hasStreamingThinkContent = computed(() => {
+  return hasThinkContent(currentStreamContent.value)
 })
 
 // 监听对话变化，加载历史消息和图谱
@@ -162,6 +176,7 @@ const handleSend = async () => {
   isStreaming.value = true
   currentStreamContent.value = ''
   currentStreamWarning.value = ''
+  streamingThinkCollapse.value = [] // 重置流式think折叠状态（默认折叠）
   
   try {
     await chatStore.queryStream(convStore.currentConversationId, query, selectedMode.value, (chunk) => {
@@ -187,11 +202,23 @@ const handleSend = async () => {
     }
     
     if (fullContent) {
+      const newMessageIndex = messages.value.length
       chatStore.addMessage(convStore.currentConversationId, {
         role: 'assistant',
         content: fullContent,
         timestamp: Date.now()
       })
+      
+      // 如果新消息包含think内容，确保默认折叠（不在thinkCollapseStates数组中）
+      if (hasThinkContent(fullContent)) {
+        // 确保新消息的索引不在折叠状态数组中（默认折叠）
+        nextTick(() => {
+          const index = thinkCollapseStates.value.indexOf(newMessageIndex)
+          if (index > -1) {
+            thinkCollapseStates.value.splice(index, 1)
+          }
+        })
+      }
       
       // 保存到后端
       await chatStore.saveMessage(convStore.currentConversationId, query, fullContent)
@@ -199,6 +226,7 @@ const handleSend = async () => {
     
     currentStreamContent.value = ''
     currentStreamWarning.value = ''
+    streamingThinkCollapse.value = [] // 重置流式think折叠状态
   } catch (error) {
     console.error('查询失败:', error)
     ElMessage.error('查询失败，请重试')
@@ -228,21 +256,32 @@ const formatTime = (timestamp) => {
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
 
-// 检查是否有 think 内容
+// 检查是否有 think 内容（支持流式输出时的部分标签）
 const hasThinkContent = (text) => {
   if (!text) return false
-  return /<(?:think|redacted_reasoning)>[\s\S]*?<\/(?:think|redacted_reasoning)>/i.test(text)
+  // 检测开始标签即可（支持流式输出时标签未闭合的情况）
+  return /<(?:think|redacted_reasoning)>/i.test(text)
 }
 
-// 提取并格式化 think 内容
+// 提取并格式化 think 内容（支持流式输出时的部分内容）
 const formatThinkContent = (text) => {
   if (!text) return ''
   
   // 支持 <think> 和 <think> 两种标签
-  const thinkMatch = text.match(/<(?:think|redacted_reasoning)>([\s\S]*?)<\/(?:think|redacted_reasoning)>/i)
-  if (!thinkMatch) return ''
+  // 先尝试匹配完整的标签对
+  let thinkMatch = text.match(/<(?:think|redacted_reasoning)>([\s\S]*?)<\/(?:think|redacted_reasoning)>/i)
   
-  let thinkText = thinkMatch[1]
+  // 如果没匹配到完整标签对，尝试匹配只有开始标签的情况（流式输出中）
+  if (!thinkMatch) {
+    const openTagMatch = text.match(/<(?:think|redacted_reasoning)>([\s\S]*)$/i)
+    if (openTagMatch) {
+      thinkMatch = openTagMatch
+    } else {
+      return ''
+    }
+  }
+  
+  let thinkText = thinkMatch[1] || ''
   
   // 转义 HTML
   let html = thinkText
@@ -261,7 +300,10 @@ const formatMessageWithWarning = (text) => {
   if (!text) return ''
   
   // 先移除 think 标签（不在主内容中显示），支持两种标签格式
+  // 先移除完整的标签对
   let content = text.replace(/<(?:think|redacted_reasoning)>[\s\S]*?<\/(?:think|redacted_reasoning)>/gi, '')
+  // 再移除未闭合的开始标签及其内容（流式输出时的情况）
+  content = content.replace(/<(?:think|redacted_reasoning)>[\s\S]*$/gi, '')
   
   // 先转义 HTML
   let html = content
@@ -586,10 +628,11 @@ const formatMarkdown = (text) => {
   background-color: #f5f7fa;
   padding: 12px;
   border-radius: 6px;
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 11px;
+  line-height: 1.5;
   color: #606266;
   margin-top: 8px;
+  font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
 }
 
 .think-content :deep(h1),

@@ -41,6 +41,20 @@ class GraphService {
     })
     return response
   }
+
+  /**
+   * 获取关系详情
+   * @param {string} conversationId - 对话ID
+   * @param {string} source - 源实体ID
+   * @param {string} target - 目标实体ID
+   * @returns {Promise<Object>} 关系详情
+   */
+  async getRelation(conversationId, source, target) {
+    const response = await api.get(`/api/conversations/${conversationId}/graph/relations`, {
+      params: { source, target }
+    })
+    return response
+  }
 }
 
 export default new GraphService()

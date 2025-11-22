@@ -1,7 +1,7 @@
 """知识图谱查询 API"""
 import json
 from typing import Optional, List
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -125,6 +125,33 @@ async def get_entity(conversation_id: str, entity_id: str):
         file_path=entity.get("file_path"),
         source_documents=source_docs
     )
+
+
+@router.get("/api/conversations/{conversation_id}/graph/relations",
+            response_model=RelationResponse)
+async def get_relation(
+    conversation_id: str,
+    source: str = Query(..., description="源实体ID"),
+    target: str = Query(..., description="目标实体ID")
+):
+    """获取单个关系详情
+    
+    Args:
+        conversation_id: 对话ID
+        source: 源实体ID
+        target: 目标实体ID
+    """
+    service = GraphService()
+    
+    relation = await service.get_relation_detail(conversation_id, source, target)
+    
+    if not relation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"关系 {source} -> {target} 不存在"
+        )
+    
+    return RelationResponse(**relation)
 
 
 @router.post("/api/conversations/{conversation_id}/query",

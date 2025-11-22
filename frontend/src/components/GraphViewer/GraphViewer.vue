@@ -58,9 +58,30 @@
           @node-click="handleNodeClick"
           @node-hover="handleNodeHover"
           @doc-click="handleDocClick"
+          @fullscreen="handleFullscreen"
         />
       </div>
     </div>
+    
+    <!-- 全屏弹窗 -->
+    <el-dialog
+      v-model="fullscreenVisible"
+      title="知识图谱 - 全屏视图"
+      width="95%"
+      :close-on-click-modal="false"
+      :close-on-press-escape="true"
+      class="graph-fullscreen-dialog"
+    >
+      <div class="fullscreen-graph-container">
+        <GraphCanvas 
+          :conversation-id="conversationId"
+          :filter-options="filterOptions"
+          @node-click="handleNodeClick"
+          @node-hover="handleNodeHover"
+          @doc-click="handleDocClick"
+        />
+      </div>
+    </el-dialog>
   </el-card>
 </template>
 
@@ -82,6 +103,9 @@ const conversationId = computed(() => conversationStore.currentConversationId)
 
 // 过滤区域折叠状态（默认展开）
 const filtersCollapsed = ref(false)
+
+// 全屏弹窗显示状态
+const fullscreenVisible = ref(false)
 
 // 过滤选项
 const filterOptions = ref({
@@ -122,6 +146,11 @@ const handleDocClick = (doc) => {
     // 例如：触发父组件事件，切换到对应的标签页和文档
     console.log('文档点击:', doc)
   }
+}
+
+// 处理全屏显示
+const handleFullscreen = () => {
+  fullscreenVisible.value = true
 }
 </script>
 
@@ -243,6 +272,19 @@ const handleDocClick = (doc) => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 全屏弹窗样式 */
+.graph-fullscreen-dialog :deep(.el-dialog__body) {
+  padding: 0;
+  height: calc(90vh - 100px);
+  min-height: 600px;
+}
+
+.fullscreen-graph-container {
+  width: 100%;
+  height: 100%;
+  min-height: 600px;
 }
 </style>
 

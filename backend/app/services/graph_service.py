@@ -189,6 +189,25 @@ class GraphService:
         
         return None
     
+    async def get_relation_detail(self, conversation_id: str, source: str, target: str) -> Optional[Dict[str, Any]]:
+        """获取关系详情
+        
+        Args:
+            conversation_id: 对话ID
+            source: 源实体ID
+            target: 目标实体ID
+            
+        Returns:
+            关系详情，如果不存在返回 None
+        """
+        relations = await self.get_all_relations(conversation_id)
+        
+        for relation in relations:
+            if relation["source"] == source and relation["target"] == target:
+                return relation
+        
+        return None
+    
     def check_has_documents_fast(self, conversation_id: str) -> bool:
         """快速检查对话是否有文档（无需初始化 LightRAG）
         
