@@ -241,6 +241,30 @@ async def get_sample_text(conversation_id: str, sample_id: str):
 
 
 @router.get(
+    "/api/conversations/{conversation_id}/exercises/samples/{sample_id}/markdown"
+)
+async def get_sample_markdown(conversation_id: str, sample_id: str):
+    """获取样本试题 Markdown 解析内容（优先），不存在则返回纯文本"""
+    service = ExerciseService()
+    
+    try:
+        markdown = service.get_sample_markdown(conversation_id, sample_id)
+        if markdown is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"样本试题 {sample_id} 不存在"
+            )
+        return {"markdown": markdown}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取样本试题 Markdown 内容失败: {str(e)}"
+        )
+
+
+@router.get(
     "/api/conversations/{conversation_id}/exercises/samples/{sample_id}/images/{image_name}"
 )
 async def get_sample_image(

@@ -2,6 +2,12 @@
   <div class="thumbnail-list">
     <div class="thumbnail-header">
       <el-text size="small">内容列表 ({{ slides.length }})</el-text>
+      <el-button
+        size="small"
+        @click="handleToggleSidebar"
+        :icon="ArrowLeft"
+        circle
+      />
     </div>
     
     <div class="thumbnail-container">
@@ -28,6 +34,7 @@
 
 <script setup>
 import { defineProps, defineEmits } from 'vue'
+import { ArrowLeft } from '@element-plus/icons-vue'
 
 const props = defineProps({
   slides: {
@@ -41,10 +48,14 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['slide-change'])
+const emit = defineEmits(['slide-change', 'toggle-sidebar'])
 
 const handleSlideClick = (slideNumber) => {
   emit('slide-change', slideNumber)
+}
+
+const handleToggleSidebar = () => {
+  emit('toggle-sidebar')
 }
 
 const getTextPreview = (text) => {
@@ -64,6 +75,9 @@ const getTextPreview = (text) => {
 }
 
 .thumbnail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   padding: 12px;
   border-bottom: 1px solid #e4e7ed;
   background-color: #fff;

@@ -7,8 +7,6 @@
 import os
 from datetime import datetime
 from app.agents.agent_a_data_preparation import run_agent_a
-from app.agents.agent_b_knowledge_analysis import run_agent_b
-from app.agents.agent_c_type_analysis import run_agent_c
 from app.agents.agent_e_question_generation import run_agent_e
 from app.agents.agent_f_quality_control import run_agent_f
 from app.agents.agent_g_grader import run_agent_g
@@ -24,12 +22,11 @@ class AgentGraph:
     注：G（评分）和 H（学习建议）是运行时根据学生提交触发，不在主流水线中。
     """
     def __init__(self):
-        self.nodes = ["A", "B", "C", "E", "F", "G", "H"]
+        self.nodes = ["A", "B", "E", "F", "G", "H"]
         self.edges = {
             "A": [],
             "B": ["A"],
-            "C": ["A", "B"],
-            "E": ["A", "B", "C"],
+            "E": ["A", "B"],
             "F": ["E"],
             "G": ["E"],  # G 依赖生成题库
             "H": ["G"],  # H 依赖评分结果
@@ -71,15 +68,11 @@ def run_agent_chain(conversation_id: str,
         results["A"] = run_agent_a(conversation_id, sample_files or [])
         print("✅ Agent A 完成\n")
 
-    # B: 知识点分析
+    # B: 知识点/难度分析（保留以防需要二次校验，可按需跳过）
     if "B" in exec_order:
+        from app.agents.agent_b_knowledge_analysis import run_agent_b
         results["B"] = run_agent_b(conversation_id)
         print("✅ Agent B 完成\n")
-
-    # C: 题型/难度建模
-    if "C" in exec_order:
-        results["C"] = run_agent_c(conversation_id)
-        print("✅ Agent C 完成\n")
 
     # E: 智能出题生成
     if "E" in exec_order:

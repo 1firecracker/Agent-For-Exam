@@ -139,7 +139,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, watch, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, User, Document, Clock, Download } from '@element-plus/icons-vue'
 import { useConversationStore } from '../../stores/conversationStore'
@@ -280,8 +280,24 @@ const formatTime = (time) => {
   })
 }
 
+// 监听对话变化，自动刷新成绩记录
+watch(
+  () => convStore.currentConversationId,
+  async (newId, oldId) => {
+    if (newId && newId !== oldId) {
+      console.log(`[RecordView] 对话切换: ${oldId} -> ${newId}`)
+      await fetchRecords()
+    } else if (!newId) {
+      // 没有选中对话，清空数据
+      records.value = []
+    }
+  },
+  { immediate: true }
+)
+
 onMounted(() => {
-  fetchRecords()
+  // watch 会在 immediate: true 时自动加载，这里不需要重复调用
+  // fetchRecords()
 })
 </script>
 

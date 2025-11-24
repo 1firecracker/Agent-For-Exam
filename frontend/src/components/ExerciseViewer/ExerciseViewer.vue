@@ -197,10 +197,10 @@
             <el-button
               type="primary"
               size="small"
-              @click="copyText"
+              @click="copyMarkdown"
               :icon="DocumentCopy"
             >
-              复制文本
+              复制解析文本
             </el-button>
           </div>
           
@@ -258,7 +258,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, UploadFilled, MagicStick, DocumentCopy } from '@element-plus/icons-vue'
 import { useConversationStore } from '../../stores/conversationStore'
@@ -469,6 +469,54 @@ const copyText = async () => {
   }
 }
 
+const copyMarkdown = async () => {
+  if (!currentSample.value || !convStore.currentConversationId) {
+    ElMessage.warning('样本详情未加载')
+    return
+  }
+  
+  try {
+    // 调用后端 API 获取 Markdown 内容（优先），不存在则返回纯文本
+    const response = await exerciseService.getSampleMarkdown(
+      convStore.currentConversationId, 
+      currentSample.value.sample_id
+    )
+    
+    const markdownContent = response.markdown
+    
+    if (!markdownContent || markdownContent.trim() === '') {
+      ElMessage.warning('没有可复制的解析内容')
+      return
+    }
+    
+    // 复制到剪贴板
+    await navigator.clipboard.writeText(markdownContent)
+    ElMessage.success('解析文本已复制到剪贴板')
+  } catch (error) {
+    console.error('复制 Markdown 失败:', error)
+    
+    // 降级方案：尝试使用 textContent
+    if (sampleDetail.value?.text_content) {
+      try {
+        const textArea = document.createElement('textarea')
+        textArea.value = sampleDetail.value.text_content
+        textArea.style.position = 'fixed'
+        textArea.style.opacity = '0'
+        document.body.appendChild(textArea)
+        textArea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textArea)
+        ElMessage.success('文本已复制到剪贴板（降级为纯文本）')
+      } catch (err) {
+        console.error('降级复制也失败:', err)
+        ElMessage.error('复制失败: ' + (error.message || '未知错误'))
+      }
+    } else {
+      ElMessage.error('复制失败: ' + (error.message || '未知错误'))
+    }
+  }
+}
+
 const downloadSampleFile = () => {
   if (!currentSample.value || !convStore.currentConversationId) return
   const url = exerciseService.getSampleFileUrl(convStore.currentConversationId, currentSample.value.sample_id)
@@ -602,6 +650,37 @@ const formatTime = (timeStr) => {
   return date.toLocaleString('zh-CN')
 }
 
+// 监听对话变化，自动刷新样本列表和生成的题目
+watch(
+  () => convStore.currentConversationId,
+  async (newId, oldId) => {
+    if (newId && newId !== oldId) {
+      console.log(`[ExerciseViewer] 对话切换: ${oldId} -> ${newId}`)
+      
+      // 停止旧的轮询
+      stopPolling()
+      
+      // 重置状态
+      viewSampleDialogVisible.value = false
+      currentSample.value = null
+      sampleDetail.value = null
+      generatedQuestions.value = []
+      generationResult.value = null
+      
+      // 加载新对话的数据
+      await loadSamples()
+      await loadGeneratedQuestions()
+    } else if (!newId) {
+      // 没有选中对话，清空数据
+      samples.value = []
+      generatedQuestions.value = []
+      generationResult.value = null
+      stopPolling()
+    }
+  },
+  { immediate: true }
+)
+
 // 生命周期
 onMounted(() => {
   // 从路由参数同步 conversation_id 到 store
@@ -610,7 +689,8 @@ onMounted(() => {
     convStore.selectConversation(conversationId)
   }
   
-  loadSamples()
+  // watch 会在 immediate: true 时自动加载，这里不需要重复调用
+  // loadSamples()
 })
 
 onUnmounted(() => {

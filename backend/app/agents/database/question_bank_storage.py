@@ -3,9 +3,12 @@
 # 文件：backend/app/agents/database/question_bank_storage.py
 # 功能：题库（QuestionBank）的独立存取
 # 说明：
-#   - 每个 conversation_id 对应一个专属题库文件：
+#   - 每个 conversation_id 对应一个专属题库目录：
 #       data/<conversation_id>/quiz/question_bank.json
-#   - 可被 Agent A（生成题库） 和 Agent E（读取题库） 共同使用
+#       data/<conversation_id>/generated/question_bank.json
+#       data/<conversation_id>/corrected/question_bank.json
+#       data/<conversation_id>/graded/question_bank.json
+#   - 可被 Agent A（生成题库） 和 Agent E/F/G（读取题库） 共同使用
 # ===========================================================
 
 import os
@@ -20,6 +23,7 @@ from app.agents.models.quiz_models import QuestionBank
 
 BASE_DATA_DIR = os.path.join(os.path.dirname(__file__), "../../../data")
 BASE_DATA_DIR = os.path.abspath(BASE_DATA_DIR)
+VARIANT_SUFFIXES = ["generated", "corrected", "graded"]
 
 # -----------------------------------------------------------
 # 工具函数
@@ -30,10 +34,36 @@ def _ensure_dir(path: str):
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
 
+def _split_conversation_variant(conversation_id: str):
+    """
+    将 conversation_id 中的 _generated / _corrected / _graded 后缀拆分出来，
+    返回 (base_id, variant)
+    """
+    for suffix in VARIANT_SUFFIXES:
+        marker = f"_{suffix}"
+        if conversation_id.endswith(marker):
+            base = conversation_id[: -len(marker)]
+            return base or conversation_id, suffix
+    return conversation_id, None
+
+
 def _get_bank_file_path(conversation_id: str) -> str:
-    """获取题库文件路径"""
-    folder = os.path.join(BASE_DATA_DIR, conversation_id, "quiz")
+    """获取题库文件路径（支持多种 variant）"""
+    base_id, variant = _split_conversation_variant(conversation_id)
+    if variant:
+        folder = os.path.join(BASE_DATA_DIR, base_id, variant)
+    else:
+        folder = os.path.join(BASE_DATA_DIR, base_id, "quiz")
     _ensure_dir(folder)
+    return os.path.join(folder, "question_bank.json")
+
+
+def _get_legacy_bank_file_path(conversation_id: str) -> Optional[str]:
+    """旧版本路径（conversation_id 直接带后缀）"""
+    base_id, variant = _split_conversation_variant(conversation_id)
+    if not variant:
+        return None
+    folder = os.path.join(BASE_DATA_DIR, f"{base_id}_{variant}", "quiz")
     return os.path.join(folder, "question_bank.json")
 
 # -----------------------------------------------------------
@@ -119,7 +149,10 @@ def load_question_bank(conversation_id: str) -> Optional[QuestionBank]:
     """
     file_path = _get_bank_file_path(conversation_id)
     if not os.path.exists(file_path):
-        return None
+        legacy_path = _get_legacy_bank_file_path(conversation_id)
+        if not legacy_path or not os.path.exists(legacy_path):
+            return None
+        file_path = legacy_path
 
     with open(file_path, "r", encoding="utf-8") as f:
         raw = json.load(f)

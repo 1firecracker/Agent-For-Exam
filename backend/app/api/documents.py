@@ -447,10 +447,9 @@ class SlideListResponse(BaseModel):
     slides: List[SlideResponse]
 
 
-@router.get("/api/conversations/{conversation_id}/documents/{file_id}/slides",
-            response_model=SlideListResponse)
+@router.get("/api/conversations/{conversation_id}/documents/{file_id}/slides")
 async def get_document_slides(conversation_id: str, file_id: str):
-    """获取文档的所有幻灯片/页面列表
+    """获取文档的所有幻灯片/页面列表（支持浏览器缓存）
     
     支持 PPTX 和 PDF 格式
     
@@ -458,6 +457,10 @@ async def get_document_slides(conversation_id: str, file_id: str):
         conversation_id: 对话ID
         file_id: 文件ID
     """
+    from fastapi import Response
+    import os
+    import hashlib
+    
     service = DocumentService()
     parser = DocumentParser()
     
@@ -476,6 +479,14 @@ async def get_document_slides(conversation_id: str, file_id: str):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="此接口仅支持 PPTX 和 PDF 格式文件"
         )
+    
+    # 生成 ETag（基于文件路径和修改时间）
+    file_path = document["file_path"]
+    file_stat = os.stat(file_path)
+    etag = hashlib.md5(f"{file_path}{file_stat.st_mtime}".encode()).hexdigest()
+    
+    # 创建带缓存头的响应
+    from fastapi.responses import JSONResponse
     
     try:
         # 解析文档
@@ -501,11 +512,11 @@ async def get_document_slides(conversation_id: str, file_id: str):
                 }
                 slides_data.append(slide_data)
             
-            return SlideListResponse(
-                filename=parsed_data["filename"],
-                total_slides=parsed_data["total_pages"],
-                slides=slides_data
-            )
+            result = {
+                "filename": parsed_data["filename"],
+                "total_slides": parsed_data["total_pages"],
+                "slides": slides_data
+            }
         else:
             # PPTX: 为每个幻灯片提取文本位置信息
             slides_data = []
@@ -514,11 +525,20 @@ async def get_document_slides(conversation_id: str, file_id: str):
                 slide["text_positions"] = []
                 slide["slide_dimensions"] = None
             
-            return SlideListResponse(
-                filename=parsed_data["filename"],
-                total_slides=parsed_data["total_slides"],
-                slides=parsed_data["slides"]
-            )
+            result = {
+                "filename": parsed_data["filename"],
+                "total_slides": parsed_data["total_slides"],
+                "slides": parsed_data["slides"]
+            }
+        
+        # 返回带缓存头的响应
+        return JSONResponse(
+            content=result,
+            headers={
+                "Cache-Control": "public, max-age=3600",  # 缓存1小时
+                "ETag": f'"{etag}"'
+            }
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

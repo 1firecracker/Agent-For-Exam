@@ -31,16 +31,6 @@
             >
               刷新
             </el-button>
-            <el-button
-              v-if="collapsed"
-              @click="toggleSidebar"
-              :icon="ArrowRight"
-            />
-            <el-button
-              v-else
-              @click="toggleSidebar"
-              :icon="ArrowLeft"
-            />
           </div>
         </div>
       </template>
@@ -54,12 +44,22 @@
               :slides="slides"
               :current-slide-number="currentSlideNumber"
               @slide-change="handleSlideChange"
+              @toggle-sidebar="toggleSidebar"
             />
           </div>
         </transition>
 
         <!-- 主显示区：幻灯片查看器 -->
         <div class="main-content" :class="{ 'sidebar-collapsed': collapsed }">
+          <!-- 展开侧边栏按钮（悬浮在左上角） -->
+          <el-button
+            v-if="collapsed"
+            class="expand-sidebar-btn"
+            @click="toggleSidebar"
+            :icon="ArrowRight"
+            circle
+          />
+          
           <SlideViewer
             :slide="currentSlide"
             :current-slide-number="currentSlideNumber"
@@ -102,7 +102,7 @@ const loading = ref(false)
 const slides = ref([])
 const currentSlideNumber = ref(1)
 const zoomLevel = ref(1)
-const collapsed = ref(false)
+const collapsed = ref(true)  // 默认侧边栏收缩
 const selectedFileId = ref(props.defaultFileId || null)
 
 // 监听 defaultFileId 变化
@@ -202,15 +202,25 @@ const toggleSidebar = () => {
 // 监听对话变化，自动加载文档列表
 watch(
   () => conversationStore.currentConversationId,
-  async (newId) => {
-    if (newId) {
+  async (newId, oldId) => {
+    if (newId && newId !== oldId) {
+      console.log(`[PPTViewer] 对话切换: ${oldId} -> ${newId}`)
+      
+      // 重置状态
+      selectedFileId.value = null
+      slides.value = []
+      currentSlideNumber.value = 1
+      
+      // 加载新对话的文档列表
       await documentStore.loadDocuments(newId)
+      
       // 自动选择第一个支持的文档（PPTX或PDF）
-      if (supportedDocuments.value.length > 0 && !selectedFileId.value) {
+      if (supportedDocuments.value.length > 0) {
         selectedFileId.value = supportedDocuments.value[0].file_id
         await loadSlides()
       }
-    } else {
+    } else if (!newId) {
+      // 没有选中对话，清空数据
       selectedFileId.value = null
       slides.value = []
     }
@@ -309,10 +319,19 @@ onUnmounted(() => {
   flex: 1;
   overflow: hidden;
   transition: margin-left 0.3s;
+  position: relative;
 }
 
 .main-content.sidebar-collapsed {
   margin-left: 0;
+}
+
+.expand-sidebar-btn {
+  position: absolute;
+  top: 80px;  /* 往下移动，避免遮挡其他内容 */
+  left: 16px;
+  z-index: 1000;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
 }
 
 /* 过渡动画 */

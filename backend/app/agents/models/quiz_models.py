@@ -19,6 +19,8 @@ class SubQuestion(BaseModel):
     stem: str                                       # 子问题干
     score: int = 0                                  # 子问分值
     question_type: Optional[str] = "short_answer"   # 子问题型
+    difficulty: Optional[str] = "medium"            # 子问题难度
+    knowledge_points: List[str] = []                # 子问题知识点
     sub_questions: List["SubQuestion"] = []         # 嵌套子问题
 
 

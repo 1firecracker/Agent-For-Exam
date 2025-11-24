@@ -1,153 +1,239 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
 # 文件：backend/app/agents/agent_b_knowledge_analysis.py
-# 功能：Agent B - 异步知识点覆盖与难度分析
+# 功能：Agent B - 题目关联知识检索（向量库 + 知识图谱）
 # ===========================================================
 
-import os
-import re
-import json
 import asyncio
-import aiohttp
+import json
+import os
+from typing import Dict, List, Tuple
+
 from dotenv import load_dotenv
+from lightrag import QueryParam
+
 from app.agents.shared_state import shared_state
-from app.agents.database.question_bank_storage import save_question_bank, load_question_bank
-from app.agents.models.quiz_models import QuestionBank
+from app.agents.database.question_bank_storage import BASE_DATA_DIR, load_question_bank
+from app.agents.models.quiz_models import QuestionBank, SubQuestion
+from app.services.graph_service import GraphService
+from app.services.lightrag_service import LightRAGService
 
-# -----------------------------------------------------------
-# 加载 .env 配置
-# -----------------------------------------------------------
 load_dotenv()
-API_URL = os.getenv("LLM_BINDING_HOST", "https://api.siliconflow.cn/v1")
-API_KEY = os.getenv("LLM_BINDING_API_KEY")
-MODEL_NAME = os.getenv("LLM_MODEL", "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B")
-
-# -----------------------------------------------------------
-# 异步 LLM 调用函数
-# -----------------------------------------------------------
-
-async def async_analyze_with_llm(session, stem: str, answer: str):
-    """
-    调用 SiliconFlow 平台的 DeepSeek-R1-Qwen3-8B 模型
-    异步分析题目的知识点、难度、题型。
-    """
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    prompt = f"""
-你是一名智能教育分析助手。请阅读以下题目和答案，并判断：
-
-1. 主要知识点（列出不超过3个，中文表述）
-2. 题型（选择题/简答题/编程题/判断题）
-3. 难度等级（easy/medium/hard）
-
-请输出严格的 JSON 格式，不要包含任何解释。
-
-题干：{stem}
-答案：{answer}
-
-输出格式：
-{{
-  "difficulty": "",
-  "knowledge_points": [],
-  "question_type": ""
-}}
-"""
-
-    payload = {
-        "model": MODEL_NAME,
-        "messages": [
-            {"role": "system", "content": "你是一名严谨的教育分析助手。"},
-            {"role": "user", "content": prompt}
-        ],
-        "max_tokens": 400,
-        "temperature": 0.3
-    }
-
-    for attempt in range(2):  # ✅ 最多重试两次
-        try:
-            # 使用 ClientTimeout 设置更长的超时（总共180秒，连接30秒）
-            timeout = aiohttp.ClientTimeout(total=500, connect=30, sock_read=150)
-            async with session.post(
-                f"{API_URL}/chat/completions", 
-                headers=headers, 
-                json=payload, 
-                timeout=timeout
-            ) as resp:
-                result = await resp.json()
-                content = result["choices"][0]["message"]["content"].strip()
-                match = re.search(r"\{.*\}", content, re.S)
-                if match:
-                    content = match.group(0)
-                parsed = json.loads(content)
-                diff = parsed.get("difficulty", "medium")
-                kp = parsed.get("knowledge_points", ["通用知识"])
-                qtype = parsed.get("question_type", "short_answer")
-                print(f"👉 LLM解析结果: 难度={diff}, 知识点={kp}, 类型={qtype}")
-                return diff, kp, qtype
-        except asyncio.TimeoutError:
-            if attempt == 0:
-                print(f"[⚠️ LLM调用超时，重试一次...]")
-                await asyncio.sleep(3)
-            else:
-                print(f"[❌ LLM调用两次均超时，使用默认值]")
-                return "medium", ["通用知识"], "short_answer"
-        except aiohttp.ClientConnectorError as e:
-            # DNS 解析失败或网络连接问题
-            if attempt == 0:
-                print(f"[⚠️ 网络连接失败，重试一次] {type(e).__name__}")
-                await asyncio.sleep(5)  # 网络问题等待更久
-            else:
-                print(f"[❌ 网络连接两次均失败，使用默认值] {type(e).__name__}")
-                return "medium", ["通用知识"], "short_answer"
-        except Exception as e:
-            if attempt == 0:
-                print(f"[⚠️ LLM调用失败，重试一次] {type(e).__name__}: {e}")
-                await asyncio.sleep(2)
-            else:
-                print(f"[❌ LLM调用两次均失败] {type(e).__name__}: {e}")
-                return "medium", ["通用知识"], "short_answer"  # ✅ 内部fallback，不再抛出异常
 
 
-# -----------------------------------------------------------
-# 主任务：并发分析整个题库（限制并发数）
-# -----------------------------------------------------------
+def _normalize_text(value: str) -> str:
+    return str(value or "").strip()
 
-async def async_analyze_question_bank(qb: QuestionBank, max_concurrent: int = 2):
-    """
-    并发分析所有题目，使用 Semaphore 限制并发数。
-    
-    Args:
-        qb: 题库对象
-        max_concurrent: 最大并发数（默认 2，避免 API 限流和网络问题）
-    """
+
+def _normalize_key(value: str) -> str:
+    return _normalize_text(value).lower()
+
+
+def _ensure_list(items) -> List[str]:
+    normalized = []
+    if isinstance(items, list):
+        for item in items:
+            text = _normalize_text(item)
+            if text:
+                normalized.append(text)
+    return normalized
+
+
+def _flatten_questions(qb: QuestionBank) -> Dict[str, Dict[str, List[str]]]:
+    flattened: Dict[str, Dict[str, List[str]]] = {}
+
+    def collect_sub_questions(base_key: str, subs: List[SubQuestion]):
+        if not subs:
+            return
+        for index, sub in enumerate(subs, 1):
+            label = _normalize_text(sub.label or "")
+            suffix = label.replace(" ", "") if label else f"sub_{index}"
+            key = f"{base_key}-{suffix}"
+            flattened[key] = {
+                "stem": _normalize_text(sub.stem or ""),
+                "knowledge_points": _ensure_list(sub.knowledge_points or []),
+            }
+            if sub.sub_questions:
+                collect_sub_questions(key, sub.sub_questions)
+
+    for idx, question in enumerate(qb.questions, 1):
+        qid = _normalize_text(getattr(question, "id", "") or f"Q{idx:03d}")
+        flattened[qid] = {
+            "stem": _normalize_text(question.stem or ""),
+            "knowledge_points": _ensure_list(question.knowledge_points or []),
+        }
+        if question.sub_questions:
+            collect_sub_questions(qid, question.sub_questions)
+
+    return flattened
+
+
+def _build_entity_lookup(entities: List[Dict]) -> Tuple[Dict[str, Dict], List[Dict]]:
+    lookup: Dict[str, Dict] = {}
+    for entity in entities:
+        name = entity.get("name") or entity.get("entity_id") or ""
+        normalized = _normalize_key(name)
+        if normalized and normalized not in lookup:
+            lookup[normalized] = entity
+    return lookup, entities
+
+
+def _collect_relations_map(relations: List[Dict]) -> Dict[str, List[Dict]]:
+    adjacency: Dict[str, List[Dict]] = {}
+    for relation in relations:
+        source = relation.get("source") or relation.get("src_id")
+        target = relation.get("target") or relation.get("tgt_id")
+        for node in (source, target):
+            node_id = _normalize_text(node or "")
+            if node_id:
+                adjacency.setdefault(node_id, []).append(
+                    {
+                        "source": source,
+                        "target": target,
+                        "type": relation.get("type") or relation.get("relation_type") or "",
+                        "description": relation.get("description", ""),
+                    }
+                )
+    return adjacency
+
+
+def _find_entity(
+    knowledge_point: str,
+    lookup: Dict[str, Dict],
+    all_entities: List[Dict],
+) -> Dict | None:
+    normalized = _normalize_key(knowledge_point)
+    if normalized in lookup:
+        return lookup[normalized]
+    for entity in all_entities:
+        candidate = _normalize_key(entity.get("name") or entity.get("entity_id") or "")
+        if candidate and (normalized in candidate or candidate in normalized):
+            return entity
+    return None
+
+
+def _match_graph_data(
+    knowledge_points: List[str],
+    lookup: Dict[str, Dict],
+    all_entities: List[Dict],
+    relation_map: Dict[str, List[Dict]],
+    max_relations: int = 5,
+) -> List[Dict]:
+    matches = []
+    visited = set()
+    for kp in knowledge_points:
+        entity = _find_entity(kp, lookup, all_entities)
+        if not entity:
+            continue
+        entity_id = entity.get("entity_id") or entity.get("name")
+        if not entity_id or entity_id in visited:
+            continue
+        visited.add(entity_id)
+        normalized_id = _normalize_text(entity_id)
+        relations = relation_map.get(normalized_id, [])[:max_relations]
+        matches.append(
+            {
+                "knowledge_point": kp,
+                "entity": entity.get("name") or entity_id,
+                "description": entity.get("description", ""),
+                "relations": relations,
+                "source_documents": entity.get("source_documents", []),
+            }
+        )
+    return matches
+
+
+async def _query_vector_context(lightrag, stem: str, top_k: int) -> List[Dict]:
+    if not stem:
+        return []
+    param = QueryParam(mode="local")
+    param.top_k = top_k
+    param.chunk_top_k = top_k
+    result = await lightrag.aquery_data(stem, param)
+    if not isinstance(result, dict):
+        return []
+    payload = result.get("data") or {}
+    chunks = payload.get("chunks") or []
+    matches = []
+    for chunk in chunks[:top_k]:
+        matches.append(
+            {
+                "chunk_id": chunk.get("chunk_id"),
+                "file_path": chunk.get("file_path"),
+                "content": chunk.get("content", ""),
+                "reference_id": chunk.get("reference_id"),
+            }
+        )
+    return matches
+
+
+def _save_related_knowledge(conversation_id: str, related_payload: Dict[str, Dict]) -> str:
+    target_dir = os.path.join(BASE_DATA_DIR, conversation_id)
+    if not os.path.exists(target_dir):
+        os.makedirs(target_dir, exist_ok=True)
+    file_path = os.path.join(target_dir, "related_knowledge.json")
+    with open(file_path, "w", encoding="utf-8") as fp:
+        json.dump(related_payload, fp, ensure_ascii=False, indent=2)
+    return file_path
+
+
+async def _collect_related_knowledge(
+    conversation_id: str,
+    flattened_questions: Dict[str, Dict[str, List[str]]],
+    vector_top_k: int = 5,
+    max_concurrent: int = 3,
+) -> Dict[str, Dict]:
+    graph_service = GraphService()
+    lightrag_service = LightRAGService()
+    has_docs = graph_service.check_has_documents_fast(conversation_id)
+
+    lightrag = None
+    entities: List[Dict] = []
+    relations: List[Dict] = []
+    if has_docs:
+        lightrag = await lightrag_service.get_lightrag_for_conversation(conversation_id)
+        entities = await graph_service.get_all_entities(conversation_id)
+        relations = await graph_service.get_all_relations(conversation_id)
+
+    entity_lookup, entity_list = _build_entity_lookup(entities)
+    relation_map = _collect_relations_map(relations)
+
     semaphore = asyncio.Semaphore(max_concurrent)
-    
-    async def analyze_with_limit(session, q):
+    tasks = []
+
+    async def process_item(key: str, payload: Dict[str, List[str]]):
         async with semaphore:
-            # 每个请求之间添加小延迟，避免瞬间并发
-            await asyncio.sleep(0.5)
-            return await async_analyze_with_llm(session, q.stem, q.answer)
-    
-    async with aiohttp.ClientSession() as session:
-        tasks = [analyze_with_limit(session, q) for q in qb.questions]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+            vector_matches: List[Dict] = []
+            if lightrag is not None:
+                vector_matches = await _query_vector_context(
+                    lightrag, payload.get("stem", ""), vector_top_k
+                )
+            graph_matches = _match_graph_data(
+                payload.get("knowledge_points", []),
+                entity_lookup,
+                entity_list,
+                relation_map,
+            )
+            return key, {
+                "vector_matches": vector_matches,
+                "graph_matches": graph_matches,
+            }
+    i = 0
+    for key, payload in flattened_questions.items():
+        print(f"第{i}个子题目正在处理")
+        i += 1
+        tasks.append(process_item(key, payload))
 
-    return results
+    gathered = await asyncio.gather(*tasks)
+    return {key: value for key, value in gathered}
 
-
-# -----------------------------------------------------------
-# Agent B 主函数（外部同步接口）
-# -----------------------------------------------------------
 
 def run_agent_b(conversation_id: str):
     """
-    Agent B 主函数：
-    从 shared_state 或文件加载题库 → 并发调用 LLM → 更新并保存。
+    Agent B：
+    从题库抽取最小粒度题目 → 查询向量知识库 / 知识图谱 → 保存 related_knowledge.json
     """
-    print(f"🧩 [Agent B] 开始知识点与难度分析（异步并发版）...")
+    print(f"🧩 [Agent B] 开始关联知识检索，会话ID: {conversation_id}")
 
     qb: QuestionBank = shared_state.question_bank
     if qb is None or not qb.questions:
@@ -155,41 +241,20 @@ def run_agent_b(conversation_id: str):
         qb = load_question_bank(conversation_id)
 
     if qb is None or not qb.questions:
-        print("❌ 无可分析题库，Agent B 终止。")
+        print("❌ 无可处理题库，Agent B 终止。")
         return None
 
-    print(f"👉 已加载题库，共 {len(qb.questions)} 题。")
+    flattened = _flatten_questions(qb)
+    if not flattened:
+        print("⚠️ 题库无法展开子题，Agent B 终止。")
+        return None
 
-    # 运行异步分析（这里本身也要兜底，防止 asyncio.run 直接抛异常）
-    try:
-        results = asyncio.run(async_analyze_question_bank(qb))
-    except Exception as e:
-        print(f"[❌ Agent B 异步总调度失败] {type(e).__name__}: {e}")
-        # 整体失败：给所有题目填默认值，保证后续 Agent 不至于崩
-        for q in qb.questions:
-            q.difficulty = getattr(q, "difficulty", "medium")
-            q.knowledge_points = getattr(q, "knowledge_points", ["通用知识"])
-            q.question_type = getattr(q, "question_type", "short_answer")
-        shared_state.question_bank = qb
-        save_path = save_question_bank(conversation_id, qb)
-        print(f"⚠️ 使用默认难度/知识点/题型保存至: {save_path}")
-        return qb
+    related_map = asyncio.run(
+        _collect_related_knowledge(conversation_id, flattened)
+    )
+    file_path = _save_related_knowledge(conversation_id, related_map)
 
-    # 写回结果（逐题兜底处理 Exception）
-    for idx, (q, result) in enumerate(zip(qb.questions, results)):
-        if isinstance(result, Exception):
-            # 这一题的 LLM 调用真的挂了，我们打日志 + 默认值
-            print(f"[⚠️ 题目 {q.id} LLM 分析失败，使用默认值] {type(result).__name__}: {result}")
-            diff, kp, qtype = "medium", ["通用知识"], "short_answer"
-        else:
-            diff, kp, qtype = result
-
-        q.difficulty, q.knowledge_points, q.question_type = diff, kp, qtype
-        print(f"📘 {q.id}: {q.stem[:25]}... → 难度={diff} | 知识点={kp} | 类型={qtype}")
-
-    # 保存更新结果
-    shared_state.question_bank = qb
-    save_path = save_question_bank(conversation_id, qb)
-    print(f"✅ 异步知识点分析完成并保存至: {save_path}")
-    return qb
-
+    shared_state.related_knowledge_path = file_path
+    print(f"✅ Agent B 完成，关联知识已保存：{file_path}")
+    print(f"📌 记录数量：{len(related_map)}")
+    return related_map

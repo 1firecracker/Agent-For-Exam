@@ -494,6 +494,38 @@ class ExerciseService:
         if not sample:
             return None
         return sample.get("text_content", "")
+    
+    def get_sample_markdown(self, conversation_id: str, sample_id: str) -> Optional[str]:
+        """获取样本试题的 Markdown 解析内容（优先），如果不存在则返回纯文本
+        
+        Args:
+            conversation_id: 对话ID
+            sample_id: 样本ID
+            
+        Returns:
+            Markdown 内容或纯文本内容，如果都不存在返回None
+        """
+        sample_dir = self._get_sample_dir(conversation_id, sample_id)
+        if not sample_dir.exists():
+            return None
+        
+        # 优先尝试读取 result.md（由 MinerU2.5 或 PaddleOCR 生成）
+        result_md_file = sample_dir / "result.md"
+        if result_md_file.exists():
+            try:
+                with open(result_md_file, 'r', encoding='utf-8') as f:
+                    return f.read()
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"读取 result.md 文件失败: {result_md_file}, 错误: {e}")
+        
+        # 回退到 text.txt
+        sample = self.get_sample(conversation_id, sample_id)
+        if sample:
+            return sample.get("text_content", "")
+        
+        return None
 
     def _find_any_completed_conversation(self) -> Optional[str]:
         """
@@ -536,17 +568,32 @@ class ExerciseService:
         # 清除内存缓存
         shared_state.reset()
         
-        # 清除磁盘文件（包括原始题库和所有生成阶段）
-        suffixes = ['', '_generated', '_corrected', '_graded']
-        for suffix in suffixes:
-            cache_id = f"{conversation_id}{suffix}"
-            cache_dir = os.path.join(BASE_DATA_DIR, cache_id)
-            if os.path.exists(cache_dir):
+        # 清除磁盘题库缓存，但保留 LightRAG 的工作空间目录
+        new_root = Path(BASE_DATA_DIR) / conversation_id
+        protected = {conversation_id}  # LightRAG 会在该子目录下存储知识图谱
+        if new_root.exists():
+            for entry in new_root.iterdir():
+                if entry.name in protected:
+                    continue
                 try:
-                    shutil.rmtree(cache_dir)
-                    print(f"[🗑️ 已清除缓存] {cache_dir}")
+                    if entry.is_dir():
+                        shutil.rmtree(entry)
+                    else:
+                        entry.unlink()
+                    print(f"[🗑️ 已清除缓存] {entry}")
                 except Exception as e:
-                    print(f"[⚠️ 清除缓存失败] {cache_dir}: {e}")
+                    print(f"[⚠️ 清除缓存失败] {entry}: {e}")
+
+        # 清理派生目录（conversation_id + suffix）
+        legacy_suffixes = ['generated', 'corrected', 'graded']
+        for suffix in legacy_suffixes:
+            legacy_dir = Path(BASE_DATA_DIR) / f"{conversation_id}{suffix}"
+            if legacy_dir.exists():
+                try:
+                    shutil.rmtree(legacy_dir)
+                    print(f"[🗑️ 已清除缓存] {legacy_dir}")
+                except Exception as e:
+                    print(f"[⚠️ 清除缓存失败] {legacy_dir}: {e}")
 
     def generate_questions(self, conversation_id: str, up_to: str = "F") -> Dict:
         """

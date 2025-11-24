@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
 # 文件：backend/app/agents/agent_a_data_preparation.py
-# 功能：Agent A - Markdown 样卷抽题 → QuestionBank
+# 功能：Agent A - 扫描 Markdown 样卷 → 调用 LLM 生成含题型/难度/知识点的多层题库 → QuestionBank
 # ===========================================================
 
 import json
 import os
 import re
 import time
-from typing import List, Tuple
+from collections import Counter
+from typing import List, Tuple, Dict
 
 import requests
 from openai import OpenAI  # type: ignore
@@ -32,36 +33,40 @@ HEADERS = {
 OPENAI_CLIENT = OpenAI(api_key=API_KEY, base_url=API_URL) if OpenAI else None
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 
-PROMPT_TEMPLATE = """你是一名“试题抽取与结构化助手”。输入是一份 Markdown 格式的试卷内容，题目编号、
-分值和子问标记形式可能不完全统一。请严格按照以下 JSON 模板输出题目数组，并支持子问题递归嵌套：
+PROMPT_TEMPLATE = """你是一名“试题抽取与结构化助手”。输入是一份 Markdown 试卷，题目编号、分值和子问标记形式可能不统一。请严格输出 JSON 数组，每道题及其子题都要包含题型、难度（easy/medium/hard）和知识点：
 [
   {{
-    "id": "题目编号（如 1, 2, 3 或 1(a)）",
+    "id": "题目编号（如 1、2、3、1(a)）",
     "stem": "题干全文（去掉题号、分值提示）",
     "score": 题目总分（数字，缺失填 0）,
-    "question_type": "short_answer | calculation | multiple_choice | single_choice  | essay ",
+    "question_type": "short_answer | calculation | multiple_choice | single_choice | essay | programming | other",
+    "difficulty": "easy | medium | hard",
+    "knowledge_points": ["知识点1", "知识点2"],
     "sub_questions": [
         {{
             "label": "子问标记（a/i 等）",
             "stem": "子问题内容",
             "score": 子问分值（数字，缺失填 0）,
             "question_type": "子题题型，同上取值范围",
+            "difficulty": "easy | medium | hard",
+            "knowledge_points": ["知识点A", "知识点B"],
             "sub_questions": [
                 {{
-                    "label": "子问内的子问标记（如 a-1/i - 1/1/2 等）",
-                    "stem": "更细一级的子问内容",
+                    "label": "更细一级子问标记（如 a-1/i/1 等）",
+                    "stem": "更细一级子问内容",
                     "score": 子问分值（数字，缺失填 0）,
-                    "question_type": "子题题型，同上取值范围"
+                    "question_type": "子题题型，同上取值范围",
+                    "difficulty": "easy | medium | hard",
+                    "knowledge_points": ["知识点X"]
                 }}
             ]
         }}
     ]
   }}
 ]
-- 如果题目没有子问，sub_questions 设为空数组；如果子问下还有子问，继续使用同样结构递归嵌套。
-- 若整题或子问缺少分值，填 0；题型无法判断则填 other。
-- 保留 Markdown/LaTeX 公式内容。
-- 仅输出合法 JSON，不要添加额外解释或代码块标记。
+- 如果题目没有子问，sub_questions 设为空数组；若子问下还有子问，继续递归使用上述字段。
+- 分值缺失填 0；题型无法判断填 other；知识点至少给出一项（确实无法识别可使用 ["通用知识"]）。
+- 保留 Markdown/LaTeX 公式内容，只输出合法 JSON，不要添加额外解释或代码块标记。
 
 请处理以下 Markdown：
 <<<BEGIN_MARKDOWN
@@ -111,10 +116,19 @@ def _extract_json_array(text: str):
     
     text = text.strip()
     
+    def _safe_load(candidate: str):
+        fixed = (
+            candidate.replace("\\(", "\\\\(")
+            .replace("\\)", "\\\\)")
+            .replace("\\{", "\\\\{")
+            .replace("\\}", "\\\\}")
+        )
+        return json.loads(fixed)
+
     # 1. 尝试直接解析整个文本
     if text.startswith('['):
         try:
-            return json.loads(text)
+            return _safe_load(text)
         except json.JSONDecodeError:
             pass
     
@@ -122,7 +136,7 @@ def _extract_json_array(text: str):
     code_block_match = re.search(r'```(?:json)?\s*(\[[\s\S]*?\])\s*```', text)
     if code_block_match:
         try:
-            return json.loads(code_block_match.group(1))
+            return _safe_load(code_block_match.group(1))
         except json.JSONDecodeError:
             pass
     
@@ -160,7 +174,7 @@ def _extract_json_array(text: str):
                     # 找到完整数组
                     json_str = text[start_idx:i+1]
                     try:
-                        return json.loads(json_str)
+                        return _safe_load(json_str)
                     except json.JSONDecodeError:
                         pass
                     break
@@ -195,7 +209,7 @@ def extract_questions_via_llm(markdown_text: str, conversation_id: str, source_n
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.2,
-        "max_tokens": 2000,
+        "max_tokens": 4000,
     }
     # payload["response_format"] = {"type": "json_object"}
 
@@ -216,7 +230,7 @@ def extract_questions_via_llm(markdown_text: str, conversation_id: str, source_n
                     max_tokens=payload["max_tokens"],
                     # response_format=payload["response_format"],
                     extra_body={
-                        "thinking_budget": 1
+                        "thinking_budget": 256
                     }
                 )
                 cost = time.time() - start_ts
@@ -280,6 +294,14 @@ def _parse_sub_questions(entries: List[dict]) -> List[SubQuestion]:
             score = 0
         qtype_raw = entry.get("question_type", "short_answer")
         qtype = str(qtype_raw).strip() if qtype_raw is not None else "short_answer"
+        difficulty_raw = entry.get("difficulty", "medium")
+        difficulty = str(difficulty_raw).strip() if difficulty_raw is not None else "medium"
+        kp_raw = entry.get("knowledge_points", [])
+        kp_list = []
+        if isinstance(kp_raw, list):
+            kp_list = [str(k).strip() for k in kp_raw if str(k).strip()]
+        if not kp_list:
+            kp_list = ["通用知识"]
         child_entries = entry.get("sub_questions", [])
         children = _parse_sub_questions(child_entries) if isinstance(child_entries, list) else []
         label_final = label if label else f"sub_{index}"
@@ -289,6 +311,8 @@ def _parse_sub_questions(entries: List[dict]) -> List[SubQuestion]:
                 stem=stem,
                 score=score,
                 question_type=qtype or "short_answer",
+                difficulty=difficulty or "medium",
+                knowledge_points=kp_list,
                 sub_questions=children,
             )
         )
@@ -316,6 +340,14 @@ def _convert_items_to_questions(items: List[dict], source_label: str) -> List[Qu
             score = int(score_value)
         else:
             score = 0
+        difficulty_raw = item.get("difficulty", "medium")
+        difficulty = str(difficulty_raw).strip() if difficulty_raw is not None else "medium"
+        kp_raw = item.get("knowledge_points", [])
+        kp_list = []
+        if isinstance(kp_raw, list):
+            kp_list = [str(k).strip() for k in kp_raw if str(k).strip()]
+        if not kp_list:
+            kp_list = ["通用知识"]
         sub_questions = _parse_sub_questions(item.get("sub_questions", []))
 
         tags = [f"source:{source_label}", f"score:{score}"]
@@ -324,14 +356,70 @@ def _convert_items_to_questions(items: List[dict], source_label: str) -> List[Qu
             id=qid if qid else f"Q{idx:03d}",
             stem=stem,
             answer="（待补充）",
-            difficulty="medium",
-            knowledge_points=[],
+            difficulty=difficulty or "medium",
+            knowledge_points=kp_list,
             question_type=qtype or "short_answer",
             tags=tags,
             sub_questions=sub_questions,
         )
         questions.append(question)
     return questions
+
+
+def _compute_distribution(questions: List[Question]) -> Dict[str, Dict[str, float]]:
+    """
+    统计题型/难度/知识点分布，输出与原 Agent C 相同结构：
+    {
+        "conversation_id": ...,
+        "total_questions": ...,
+        "type_distribution": {...},
+        "difficulty_distribution": {...},
+        "knowledge_point_distribution": {...}
+    }
+    """
+    type_counter = Counter()
+    difficulty_counter = Counter()
+    knowledge_counter = Counter()
+
+    def traverse_question(q: Question):
+        type_counter[q.question_type or "未知类型"] += 1
+        difficulty_counter[q.difficulty or "medium"] += 1
+        if q.knowledge_points:
+            for kp in q.knowledge_points:
+                if kp:
+                    knowledge_counter[kp] += 1
+        else:
+            knowledge_counter["通用知识"] += 1
+        if q.sub_questions:
+            for sub in q.sub_questions:
+                # 将 SubQuestion 转为 Question 视角统计
+                sub_q = Question(
+                    id=f"{q.id}-{sub.label}",
+                    stem=sub.stem,
+                    answer="（子问）",
+                    difficulty=sub.difficulty or "medium",
+                    knowledge_points=sub.knowledge_points or ["通用知识"],
+                    question_type=sub.question_type or "short_answer",
+                    tags=[],
+                    sub_questions=sub.sub_questions,
+                )
+                traverse_question(sub_q)
+
+    for q in questions:
+        traverse_question(q)
+
+    def _calc(counter: Counter):
+        total = sum(counter.values())
+        if total == 0:
+            return {}
+        return {k: round(v / total, 4) for k, v in counter.items()}
+
+    return {
+        "total_questions": len(questions),
+        "type_distribution": _calc(type_counter),
+        "difficulty_distribution": _calc(difficulty_counter),
+        "knowledge_point_distribution": _calc(knowledge_counter),
+    }
 
 
 # -----------------------------------------------------------
@@ -386,6 +474,25 @@ def run_agent_a(conversation_id: str, file_paths: List[str] = None) -> QuestionB
     qb = QuestionBank(questions=all_questions, source_docs=md_files)
     shared_state.question_bank = qb
     shared_state.source_text = "\n".join(aggregated_texts)
+
+    # 统计分布并写入 shared_state
+    distribution = _compute_distribution(all_questions)
+    distribution_model = {
+        "conversation_id": conversation_id,
+        "total_questions": distribution.get("total_questions", len(all_questions)),
+        "type_distribution": distribution.get("type_distribution", {}),
+        "difficulty_distribution": distribution.get("difficulty_distribution", {}),
+        "knowledge_point_distribution": distribution.get("knowledge_point_distribution", {}),
+    }
+    shared_state.distribution_model = distribution_model
+
+    # 保存分布文件，便于替代 Agent C
+    dist_dir = os.path.join(BASE_DIR, "data", conversation_id)
+    os.makedirs(dist_dir, exist_ok=True)
+    dist_path = os.path.join(dist_dir, "distribution.json")
+    with open(dist_path, "w", encoding="utf-8") as f:
+        json.dump(distribution_model, f, ensure_ascii=False, indent=2)
+    print(f"📊 题型/难度/知识点分布已生成：{dist_path}")
 
     save_path = save_question_bank(conversation_id, qb)
     print(f"✅ Agent A 完成，共抽取 {len(all_questions)} 题。题库已保存：{save_path}")

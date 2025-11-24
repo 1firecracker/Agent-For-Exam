@@ -240,7 +240,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { UploadFilled, InfoFilled, Document } from '@element-plus/icons-vue'
 import { useConversationStore } from '../../stores/conversationStore'
@@ -426,6 +426,29 @@ const getPerformanceClass = (performance) => {
     default: return 'performance-need-improve'
   }
 }
+
+// 监听对话变化，重置批改状态
+watch(
+  () => convStore.currentConversationId,
+  (newId, oldId) => {
+    if (newId && newId !== oldId) {
+      console.log(`[GradingView] 对话切换: ${oldId} -> ${newId}`)
+      
+      // 重置状态
+      uploadedFile.value = null
+      if (fileInput.value) {
+        fileInput.value.value = ''
+      }
+      gradingForm.studentName = ''
+      gradingResult.totalScore = 0
+      gradingResult.maxScore = 100
+      gradingResult.details = null
+      gradingResult.knowledgeAnalysis = null
+      gradingResult.recommendations = []
+      gradingResult.learningAdvice = null
+    }
+  }
+)
 </script>
 
 <style scoped>

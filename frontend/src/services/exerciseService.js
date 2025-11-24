@@ -67,6 +67,19 @@ class ExerciseService {
   }
 
   /**
+   * 获取样本试题 Markdown 解析内容（优先），不存在则返回纯文本
+   * @param {string} conversationId - 对话ID
+   * @param {string} sampleId - 样本ID
+   * @returns {Promise<Object>} Markdown 内容
+   */
+  async getSampleMarkdown(conversationId, sampleId) {
+    const response = await api.get(
+      `/api/conversations/${conversationId}/exercises/samples/${sampleId}/markdown`
+    )
+    return response
+  }
+
+  /**
    * 获取样本试题图片
    * @param {string} conversationId - 对话ID
    * @param {string} sampleId - 样本ID
