@@ -1,18 +1,19 @@
 """知识图谱查询 API"""
 import json
 from typing import Optional, List
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.services.graph_service import GraphService
+from app.services.memory_service import MemoryService
 
 router = APIRouter(tags=["graph"])
 
 # 请求/响应模型
 class QueryRequest(BaseModel):
     query: str
-    mode: Optional[str] = "mix"  # naive/local/global/mix
+    mode: Optional[str] = "naive"  # naive/local/global/mix
 
 class QueryResponse(BaseModel):
     conversation_id: str
@@ -127,6 +128,33 @@ async def get_entity(conversation_id: str, entity_id: str):
     )
 
 
+@router.get("/api/conversations/{conversation_id}/graph/relations",
+            response_model=RelationResponse)
+async def get_relation(
+    conversation_id: str,
+    source: str = Query(..., description="源实体ID"),
+    target: str = Query(..., description="目标实体ID")
+):
+    """获取单个关系详情
+    
+    Args:
+        conversation_id: 对话ID
+        source: 源实体ID
+        target: 目标实体ID
+    """
+    service = GraphService()
+    
+    relation = await service.get_relation_detail(conversation_id, source, target)
+    
+    if not relation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"关系 {source} -> {target} 不存在"
+        )
+    
+    return RelationResponse(**relation)
+
+
 @router.post("/api/conversations/{conversation_id}/query",
             response_model=QueryResponse)
 async def query_knowledge_graph(conversation_id: str, request: QueryRequest):
@@ -153,6 +181,15 @@ async def query_knowledge_graph(conversation_id: str, request: QueryRequest):
         )
     
     try:
+        # 获取历史对话并计算 token（减少到3轮，并限制单条消息长度）
+        memory_service = MemoryService()
+        history = memory_service.get_recent_history(conversation_id, max_turns=3, max_tokens_per_message=500)
+        token_stats = memory_service.calculate_input_tokens(request.query, history, request.mode)
+        print(f"[Token统计] 模式={token_stats['mode']}, 查询={token_stats['query_tokens']}, "
+              f"历史={token_stats['history_tokens']} (保留{token_stats['history_count']}条: "
+              f"用户{token_stats['history_user_count']}条+助手{token_stats['history_assistant_count']}条), "
+              f"总计={token_stats['total_input_tokens']}")
+        
         result = await service.query(conversation_id, request.query, request.mode)
         
         return QueryResponse(
@@ -190,6 +227,17 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
         - 错误时：{"error": "error message"}
     """
     service = GraphService()
+    memory_service = MemoryService()
+    
+    # 获取历史对话（减少到3轮，并限制单条消息长度）
+    history = memory_service.get_recent_history(conversation_id, max_turns=3, max_tokens_per_message=500)
+    
+    # 计算并打印输入 token
+    token_stats = memory_service.calculate_input_tokens(request.query, history, request.mode)
+    print(f"[Token统计] 模式={token_stats['mode']}, 查询={token_stats['query_tokens']}, "
+          f"历史={token_stats['history_tokens']} (保留{token_stats['history_count']}条: "
+          f"用户{token_stats['history_user_count']}条+助手{token_stats['history_assistant_count']}条), "
+          f"总计={token_stats['total_input_tokens']}")
     
     # 验证查询模式（排除 bypass 模式，因为 bypass 不检索）
     valid_modes = ["naive", "local", "global", "mix"]
@@ -215,8 +263,10 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
                 lightrag = await service.lightrag_service.get_lightrag_for_conversation(conversation_id)
                 from lightrag import QueryParam
                 
-                # 使用 bypass 模式查询
+                # 使用 bypass 模式查询（包含历史对话）
                 bypass_param = QueryParam(mode="bypass", stream=True)
+                if history:
+                    bypass_param.conversation_history = history
                 bypass_result = await lightrag.aquery_llm(request.query, param=bypass_param)
                 llm_response = bypass_result.get("llm_response", {})
                 
@@ -276,13 +326,17 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
                 newline_text = '\n\n'
                 yield f"{json.dumps({'response': newline_text})}\n"
                 
-                # 直接使用 bypass 模式查询
+                # 直接使用 bypass 模式查询（包含历史对话）
                 bypass_param = QueryParam(mode="bypass", stream=True)
+                if history:
+                    bypass_param.conversation_history = history
                 bypass_result = await lightrag.aquery_llm(request.query, param=bypass_param)
                 llm_response = bypass_result.get("llm_response", {})
             else:
-                # 步骤2：执行查询（知识图谱不为空）
+                # 步骤2：执行查询（知识图谱不为空，包含历史对话）
                 param = QueryParam(mode=request.mode, stream=True)
+                if history:
+                    param.conversation_history = history
                 result = await lightrag.aquery_llm(request.query, param=param)
                 
                 # 步骤3：查询后验证结果
@@ -315,8 +369,10 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
                         newline_text = '\n\n'
                         yield f"{json.dumps({'response': newline_text})}\n"
                     
-                    # 使用 bypass 模式重新查询
+                    # 使用 bypass 模式重新查询（包含历史对话）
                     bypass_param = QueryParam(mode="bypass", stream=True)
+                    if history:
+                        bypass_param.conversation_history = history
                     bypass_result = await lightrag.aquery_llm(request.query, param=bypass_param)
                     
                     llm_response = bypass_result.get("llm_response", {})

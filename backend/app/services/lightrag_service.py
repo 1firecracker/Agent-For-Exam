@@ -1,7 +1,7 @@
 import sys
 import os
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import app.config as config
 
 # 添加 LightRAG 路径到 sys.path（必须在导入之前）
@@ -62,7 +62,7 @@ class LightRAGService:
             vector_storage=config.settings.lightrag_vector_storage,
             graph_storage=config.settings.lightrag_graph_storage,
             doc_status_storage=config.settings.lightrag_doc_status_storage,
-            chunk_token_size=300,  # 减小块大小，避免超时（从 1200 降到 600）
+            chunk_token_size=600,  # 减小块大小，避免超时（从 1200 降到 600）
             chunk_overlap_token_size=50,  # 减小重叠（从 100 降到 50）
             workspace=conversation_id,  # 使用 conversation_id 作为 workspace
             default_llm_timeout=config.settings.timeout,  # 使用配置的超时时间（400秒）
@@ -258,18 +258,22 @@ class LightRAGService:
             # 如果 pipeline_status 未初始化或出错，返回 None
             return None
     
-    async def query(self, conversation_id: str, query: str, mode: str = "mix") -> Any:
+    async def query(self, conversation_id: str, query: str, mode: str = "mix", conversation_history: Optional[List[Dict[str, str]]] = None) -> Any:
         """在指定对话的知识图谱中查询
         
         Args:
             conversation_id: 对话ID
             query: 查询文本
             mode: 查询模式（naive/local/global/mix）
+            conversation_history: 对话历史，格式: [{"role": "user/assistant", "content": "..."}]
             
         Returns:
             查询结果
         """
         lightrag = await self.get_lightrag_for_conversation(conversation_id)
         from lightrag import QueryParam
-        result = await lightrag.aquery(query, param=QueryParam(mode=mode))
+        param = QueryParam(mode=mode)
+        if conversation_history:
+            param.conversation_history = conversation_history
+        result = await lightrag.aquery(query, param=param)
         return result

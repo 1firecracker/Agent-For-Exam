@@ -20,7 +20,7 @@
           <div class="message-content">
             <!-- Think 内容折叠栏（在顶部） -->
             <div v-if="hasThinkContent(message.content)" class="think-section">
-              <el-collapse v-model="thinkCollapseStates[index]">
+              <el-collapse v-model="thinkCollapseStates">
                 <el-collapse-item :name="index" :title="'Thinking Process'" class="think-collapse">
                   <div class="think-content" v-html="formatThinkContent(message.content)"></div>
                 </el-collapse-item>
@@ -35,10 +35,18 @@
       <!-- 流式输出中显示加载 -->
       <div v-if="isStreaming" class="message assistant-message">
         <div class="message-content">
+          <!-- Think 内容折叠栏（在顶部） -->
+          <div v-if="hasStreamingThinkContent" class="think-section">
+            <el-collapse v-model="streamingThinkCollapse">
+              <el-collapse-item name="streaming" :title="'Thinking Process'" class="think-collapse">
+                <div class="think-content" v-html="formatThinkContent(currentStreamContent)"></div>
+              </el-collapse-item>
+            </el-collapse>
+          </div>
           <div class="message-text">
             <span v-if="currentStreamWarning" class="warning-text" v-html="formatMarkdown(currentStreamWarning)"></span>
             <span v-if="currentStreamWarning && currentStreamContent" v-html="formatMarkdown('\n\n')"></span>
-            <span v-html="formatEnhancedMarkdown(currentStreamContent)"></span>
+            <span v-html="formatMessageWithWarning(currentStreamContent)"></span>
             <span class="streaming-cursor">|</span>
           </div>
         </div>
@@ -54,10 +62,10 @@
           style="width: 120px;"
           placeholder="查询模式"
         >
+          <el-option label="简单模式" value="naive" />
           <el-option label="混合模式" value="mix" />
           <el-option label="本地模式" value="local" />
-          <el-option label="全局模式" value="global" />
-          <el-option label="简单模式" value="naive" />
+          <el-option label="全局模式" value="global" /> 
         </el-select>
       </div>
       
@@ -100,16 +108,22 @@ const graphStore = useGraphStore()
 
 const messagesContainer = ref(null)
 const inputText = ref('')
-const selectedMode = ref('mix')
+const selectedMode = ref('naive')
 const isStreaming = ref(false)
 const currentStreamContent = ref('')
 const currentStreamWarning = ref('')
-const thinkCollapseStates = ref({}) // 存储每个消息的折叠状态
+const thinkCollapseStates = ref([]) // 存储展开的消息索引数组（el-collapse需要数组）
+const streamingThinkCollapse = ref([]) // 流式输出时的think折叠状态（默认折叠，空数组）
 
 // 消息列表（从 chatStore 获取）
 const messages = computed(() => {
   if (!convStore.currentConversationId) return []
   return chatStore.getMessages(convStore.currentConversationId)
+})
+
+// 计算属性：流式输出时是否有think内容（确保响应式更新）
+const hasStreamingThinkContent = computed(() => {
+  return hasThinkContent(currentStreamContent.value)
 })
 
 // 监听对话变化，加载历史消息和图谱
@@ -162,6 +176,7 @@ const handleSend = async () => {
   isStreaming.value = true
   currentStreamContent.value = ''
   currentStreamWarning.value = ''
+  streamingThinkCollapse.value = [] // 重置流式think折叠状态（默认折叠）
   
   try {
     await chatStore.queryStream(convStore.currentConversationId, query, selectedMode.value, (chunk) => {
@@ -187,11 +202,23 @@ const handleSend = async () => {
     }
     
     if (fullContent) {
+      const newMessageIndex = messages.value.length
       chatStore.addMessage(convStore.currentConversationId, {
         role: 'assistant',
         content: fullContent,
         timestamp: Date.now()
       })
+      
+      // 如果新消息包含think内容，确保默认折叠（不在thinkCollapseStates数组中）
+      if (hasThinkContent(fullContent)) {
+        // 确保新消息的索引不在折叠状态数组中（默认折叠）
+        nextTick(() => {
+          const index = thinkCollapseStates.value.indexOf(newMessageIndex)
+          if (index > -1) {
+            thinkCollapseStates.value.splice(index, 1)
+          }
+        })
+      }
       
       // 保存到后端
       await chatStore.saveMessage(convStore.currentConversationId, query, fullContent)
@@ -199,6 +226,7 @@ const handleSend = async () => {
     
     currentStreamContent.value = ''
     currentStreamWarning.value = ''
+    streamingThinkCollapse.value = [] // 重置流式think折叠状态
   } catch (error) {
     console.error('查询失败:', error)
     ElMessage.error('查询失败，请重试')
@@ -228,21 +256,32 @@ const formatTime = (timestamp) => {
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
 
-// 检查是否有 think 内容
+// 检查是否有 think 内容（支持流式输出时的部分标签）
 const hasThinkContent = (text) => {
   if (!text) return false
-  return /<(?:think|redacted_reasoning)>[\s\S]*?<\/(?:think|redacted_reasoning)>/i.test(text)
+  // 检测开始标签即可（支持流式输出时标签未闭合的情况）
+  return /<(?:think|redacted_reasoning)>/i.test(text)
 }
 
-// 提取并格式化 think 内容
+// 提取并格式化 think 内容（支持流式输出时的部分内容）
 const formatThinkContent = (text) => {
   if (!text) return ''
   
   // 支持 <think> 和 <think> 两种标签
-  const thinkMatch = text.match(/<(?:think|redacted_reasoning)>([\s\S]*?)<\/(?:think|redacted_reasoning)>/i)
-  if (!thinkMatch) return ''
+  // 先尝试匹配完整的标签对
+  let thinkMatch = text.match(/<(?:think|redacted_reasoning)>([\s\S]*?)<\/(?:think|redacted_reasoning)>/i)
   
-  let thinkText = thinkMatch[1]
+  // 如果没匹配到完整标签对，尝试匹配只有开始标签的情况（流式输出中）
+  if (!thinkMatch) {
+    const openTagMatch = text.match(/<(?:think|redacted_reasoning)>([\s\S]*)$/i)
+    if (openTagMatch) {
+      thinkMatch = openTagMatch
+    } else {
+      return ''
+    }
+  }
+  
+  let thinkText = thinkMatch[1] || ''
   
   // 转义 HTML
   let html = thinkText
@@ -261,7 +300,10 @@ const formatMessageWithWarning = (text) => {
   if (!text) return ''
   
   // 先移除 think 标签（不在主内容中显示），支持两种标签格式
+  // 先移除完整的标签对
   let content = text.replace(/<(?:think|redacted_reasoning)>[\s\S]*?<\/(?:think|redacted_reasoning)>/gi, '')
+  // 再移除未闭合的开始标签及其内容（流式输出时的情况）
+  content = content.replace(/<(?:think|redacted_reasoning)>[\s\S]*$/gi, '')
   
   // 先转义 HTML
   let html = content
@@ -288,6 +330,18 @@ const formatEnhancedMarkdown = (text) => {
   // 代码块（先处理，避免被其他规则影响）
   html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
   
+  // 处理表格（在代码块之后，避免代码块内的表格被处理）
+  html = html.replace(/\|(.+)\|\s*\n\|[\s\-|:]+\|\s*\n((?:\|.+\|\s*\n?)+)/g, (match, header, rows) => {
+    const headers = header.split('|').map(h => h.trim()).filter(h => h)
+    if (headers.length === 0) return match
+    const headerHtml = headers.map(h => `<th>${h}</th>`).join('')
+    const rowsHtml = rows.trim().split('\n').filter(row => row.trim()).map(row => {
+      const cells = row.split('|').map(c => c.trim()).filter(c => c)
+      return `<tr>${cells.map(cell => `<td>${cell}</td>`).join('')}</tr>`
+    }).join('')
+    return `<table class="markdown-table"><thead><tr>${headerHtml}</tr></thead><tbody>${rowsHtml}</tbody></table>`
+  })
+  
   // 标题（#### 到 #）
   html = html.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>')
   html = html.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
@@ -303,8 +357,8 @@ const formatEnhancedMarkdown = (text) => {
   
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim()
-    // 跳过已处理的HTML标签（标题、代码块等）
-    if (line.startsWith('<') && (line.startsWith('<h') || line.startsWith('<pre') || line.startsWith('<code'))) {
+    // 跳过已处理的HTML标签（标题、代码块、表格等）
+    if (line.startsWith('<') && (line.startsWith('<h') || line.startsWith('<pre') || line.startsWith('<code') || line.startsWith('<table'))) {
       if (inList) {
         processedLines.push(`<ul>${listItems.map(item => `<li>${item}</li>`).join('')}</ul>`)
         inList = false
@@ -349,7 +403,7 @@ const formatEnhancedMarkdown = (text) => {
   for (let i = 0; i < lines2.length; i++) {
     const line = lines2[i].trim()
     // 跳过已处理的HTML标签
-    if (line.startsWith('<') && (line.startsWith('<h') || line.startsWith('<pre') || line.startsWith('<code') || line.startsWith('<ul'))) {
+    if (line.startsWith('<') && (line.startsWith('<h') || line.startsWith('<pre') || line.startsWith('<code') || line.startsWith('<ul') || line.startsWith('<table'))) {
       if (inOrderedList) {
         processedLines2.push(`<ol>${orderedListItems.map(item => `<li>${item}</li>`).join('')}</ol>`)
         inOrderedList = false
@@ -391,10 +445,10 @@ const formatEnhancedMarkdown = (text) => {
   // 行内代码
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
   
-  // 换行（但保留在代码块和列表中的换行）
+  // 换行（但保留在代码块、列表和表格中的换行）
   // 先标记已处理的块
   const blocks = []
-  html = html.replace(/(<pre>[\s\S]*?<\/pre>|<ul>[\s\S]*?<\/ul>|<ol>[\s\S]*?<\/ol>|<h[1-4]>.*?<\/h[1-4]>)/g, (match) => {
+  html = html.replace(/(<pre>[\s\S]*?<\/pre>|<ul>[\s\S]*?<\/ul>|<ol>[\s\S]*?<\/ol>|<h[1-4]>.*?<\/h[1-4]>|<table[\s\S]*?<\/table>)/g, (match) => {
     const id = `___BLOCK_${blocks.length}___`
     blocks.push(match)
     return id
@@ -586,10 +640,11 @@ const formatMarkdown = (text) => {
   background-color: #f5f7fa;
   padding: 12px;
   border-radius: 6px;
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 11px;
+  line-height: 1.5;
   color: #606266;
   margin-top: 8px;
+  font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
 }
 
 .think-content :deep(h1),
@@ -643,6 +698,29 @@ const formatMarkdown = (text) => {
 
 .message-text :deep(ol li) {
   list-style-type: decimal;
+}
+
+.message-text :deep(table.markdown-table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+  font-size: 14px;
+}
+
+.message-text :deep(table.markdown-table th),
+.message-text :deep(table.markdown-table td) {
+  border: 1px solid #e4e7ed;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.message-text :deep(table.markdown-table th) {
+  background-color: #f5f7fa;
+  font-weight: 600;
+}
+
+.message-text :deep(table.markdown-table tr:nth-child(even)) {
+  background-color: #fafafa;
 }
 </style>
 

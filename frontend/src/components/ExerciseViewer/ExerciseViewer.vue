@@ -51,8 +51,18 @@
                 <el-tag size="small">{{ row.file_type.toUpperCase() }}</el-tag>
               </template>
             </el-table-column>
+            <el-table-column prop="status" label="状态" width="100">
+              <template #default="{ row }">
+                <el-tag 
+                  size="small" 
+                  :type="row.status === 'completed' ? 'success' : row.status === 'failed' ? 'danger' : 'warning'"
+                >
+                  {{ row.status === 'completed' ? '已完成' : row.status === 'pending' ? '解析中' : row.status === 'processing' ? '解析中' : '失败' }}
+                </el-tag>
+              </template>
+            </el-table-column>
             <el-table-column prop="image_count" label="图片数" width="80" />
-            <el-table-column prop="text_length" label="文本长度" width="100">
+            <el-table-column prop="text_length" label="文本长度" width="120">
               <template #default="{ row }">
                 {{ formatFileSize(row.text_length) }}
               </template>
@@ -105,13 +115,13 @@
           </div>
         </template>
         
-        <div class="result-content">
+        <div class="result-content scroll-area">
           <el-empty
             v-if="!generating && !generationResult"
             description="暂无生成结果，请先上传样本试题并点击开始生成"
             :image-size="120"
           />
-          
+
           <div v-else-if="generating" class="generating-status">
             <el-skeleton :rows="5" animated />
             <el-alert
@@ -121,18 +131,43 @@
               style="margin-top: 16px;"
             />
           </div>
-          
+
           <div v-else-if="generationResult" class="generation-result">
             <!-- 生成结果展示 -->
             <el-alert
-              :title="`成功生成 ${generationResult.questions?.length || 0} 道试题`"
+              :title="`成功生成 ${generatedQuestions.length || 0} 道试题`"
               type="success"
               :closable="false"
               style="margin-bottom: 16px;"
             />
-            <!-- TODO: 展示生成的试题列表 -->
-            <div class="questions-list">
-              <p>试题列表展示（待实现）</p>
+            <!-- 展示生成的试题列表 -->
+            <div class="questions-list" v-if="generatedQuestions && generatedQuestions.length">
+              <h3 style="margin-bottom: 12px;">生成的试题列表：</h3>
+
+              <div
+                v-for="q in generatedQuestions"
+                :key="q.id"
+                class="question-item"
+                style="padding: 16px; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 16px;"
+              >
+                <h4>{{ q.id }}. {{ q.stem }}</h4>
+
+                <!-- 选择题选项 -->
+                <ul v-if="q.options && q.options.length > 0" style="margin-top: 8px;">
+                  <li v-for="(opt, idx) in q.options" :key="idx">{{ opt }}</li>
+                </ul>
+
+                <!-- 难度 & 题型 & 知识点 -->
+                <div style="margin-top: 12px; font-size: 13px; color: #666;">
+                  <span><strong>题型：</strong>{{ q.question_type }}</span> |
+                  <span><strong>难度：</strong>{{ q.difficulty }}</span> |
+                  <span><strong>知识点：</strong>{{ q.knowledge_points?.join(', ') }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="questions-list" v-else>
+              <p>暂无试题生成，请先点击上方按钮生成。</p>
             </div>
           </div>
         </div>
@@ -223,12 +258,15 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, UploadFilled, MagicStick, DocumentCopy } from '@element-plus/icons-vue'
 import { useConversationStore } from '../../stores/conversationStore'
 import exerciseService from '../../services/exerciseService'
+import { useRoute } from 'vue-router'
+import { api } from '../../services/api'
 
+const route = useRoute()
 const convStore = useConversationStore()
 
 // 状态
@@ -239,6 +277,8 @@ const generating = ref(false)
 const generationStatus = ref('')
 const generationResult = ref(null)
 const uploadRef = ref(null)
+const generatedQuestions = ref([])   // 用来存放后端返回的题目列表
+
 
 // 方法
 const toggleSampleSection = () => {
@@ -316,14 +356,45 @@ const handleRemove = (file) => {
   // 文件移除处理
 }
 
+// 轮询定时器
+let pollingTimer = null
+
 const loadSamples = async () => {
   if (!convStore.currentConversationId) return
   
   try {
     const response = await exerciseService.listSamples(convStore.currentConversationId)
     samples.value = response.samples || []
+    
+    // 检查是否有正在解析的样本
+    const hasPending = samples.value.some(s => s.status === 'pending' || s.status === 'processing')
+    
+    // 如果有pending样本，启动轮询；否则停止轮询
+    if (hasPending) {
+      startPolling()
+    } else {
+      stopPolling()
+    }
   } catch (error) {
     ElMessage.error('加载样本列表失败: ' + (error.message || '未知错误'))
+  }
+}
+
+// 启动轮询
+const startPolling = () => {
+  // 避免重复启动
+  if (pollingTimer) return
+  
+  pollingTimer = setInterval(() => {
+    loadSamples()
+  }, 2000) // 每2秒刷新一次
+}
+
+// 停止轮询
+const stopPolling = () => {
+  if (pollingTimer) {
+    clearInterval(pollingTimer)
+    pollingTimer = null
   }
 }
 
@@ -431,23 +502,95 @@ const startGeneration = async () => {
     ElMessage.warning('请先上传样本试题')
     return
   }
-  
+
+  // 检查当前会话ID
+  if (!convStore.currentConversationId) {
+    ElMessage.error('请先选择或创建一个会话')
+    return
+  }
+
+  // 检查是否有已完成的样本
+  const completedSamples = samples.value.filter(s => s.status === 'completed')
+  if (completedSamples.length === 0) {
+    const pendingSamples = samples.value.filter(s => s.status === 'pending')
+    if (pendingSamples.length > 0) {
+      ElMessage.warning(`有 ${pendingSamples.length} 个样本正在解析中，请稍等片刻`)
+    } else {
+      ElMessage.error('样本解析失败，请重新上传')
+    }
+    return
+  }
+
   generating.value = true
-  generationStatus.value = '正在启动生成任务...'
+  generationStatus.value = '正在清除旧缓存并生成全新题目...'
   generationResult.value = null
-  
+  generatedQuestions.value = []
+
   try {
-    // TODO: 调用生成接口
-    ElMessage.info('生成功能待实现（需要AgentService接口）')
-    generationStatus.value = '生成功能待实现'
+    const convId = convStore.currentConversationId
+
+    // 1️⃣ 调用“生成题目”
+    const res = await api.post(
+      `/api/conversations/${convId}/exercises/generate`
+    )
+
+    // ⭐⭐ 修正点 #1：不要再用 res.data
+    const data = res
+    console.log("🔥 /generate 返回:", data)
+
+    // ⭐⭐ 修正点 #2（可选，但建议）
+    if (!data || typeof data.question_count === "undefined") {
+      throw new Error("后端未返回 question_count")
+    }
+
+    generationResult.value = data
+    generationStatus.value = `✅ 成功生成 ${data.question_count} 道全新试题`
+
+    // 2️⃣ 获取题目列表
+    try {
+      const qRes = await exerciseService.getGeneratedQuestions(convId)
+      console.log("📌 getGeneratedQuestions 返回:", qRes)
+      generatedQuestions.value = qRes.questions || []
+      ElMessage.success(`已生成 ${qRes.questions?.length || 0} 道新题目`)
+    } catch (err) {
+      console.error('读取生成题目列表失败：', err)
+      ElMessage.warning('题目已经生成，但在读取题目列表时出错')
+    }
+
   } catch (error) {
-    ElMessage.error('启动失败: ' + (error.message || '未知错误'))
+    console.error('生成失败：', error)
+    const msg =
+      error.response?.data?.detail ||
+      error.message ||
+      '未知错误'
+    
+    // 更友好的错误提示
+    if (msg.includes('未找到任何样本试卷')) {
+      ElMessage.error('当前会话未上传样本试卷，请先在上方上传PDF/DOCX/TXT文件')
+    } else if (msg.includes('正在解析中')) {
+      ElMessage.warning(msg)
+    } else {
+      ElMessage.error('生成试题失败：' + msg)
+    }
+    
+    generationStatus.value = '❌ 生成失败'
   } finally {
     generating.value = false
   }
 }
 
+
+
+
+
+
 const formatFileSize = (bytes) => {
+  // 处理 undefined, null, 或非数字情况
+  if (bytes === undefined || bytes === null || isNaN(bytes)) {
+    return '解析中...'
+  }
+  // 0 字节是有效值
+  if (bytes === 0) return '0 B'
   if (bytes < 1024) return bytes + ' B'
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
   return (bytes / 1024 / 1024).toFixed(1) + ' MB'
@@ -461,7 +604,17 @@ const formatTime = (timeStr) => {
 
 // 生命周期
 onMounted(() => {
+  // 从路由参数同步 conversation_id 到 store
+  const conversationId = route.params.conversation_id
+  if (conversationId && conversationId !== convStore.currentConversationId) {
+    convStore.selectConversation(conversationId)
+  }
+  
   loadSamples()
+})
+
+onUnmounted(() => {
+  stopPolling()
 })
 </script>
 
@@ -626,5 +779,18 @@ onMounted(() => {
   padding: 20px;
   text-align: center;
 }
+
+.scroll-area {
+  max-height: 70vh;     /* 可见区域 70% 屏幕高度 */
+  overflow-y: auto;     /* 开启纵向滚动条 */
+  padding-right: 10px;  /* 防止滚动条遮挡内容 */
+}
+
+.question-item {
+  word-wrap: break-word; /* 自动换行，避免题干太长撑爆布局 */
+  white-space: normal;
+}
 </style>
+
+
 

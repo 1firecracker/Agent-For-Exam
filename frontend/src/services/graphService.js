@@ -34,10 +34,24 @@ class GraphService {
    * @param {string} mode - 查询模式（naive/local/global/mix，默认 mix）
    * @returns {Promise<Object>} 查询结果
    */
-  async query(conversationId, query, mode = 'mix') {
+  async query(conversationId, query, mode = 'naive') {
     const response = await api.post(`/api/conversations/${conversationId}/query`, {
       query,
       mode
+    })
+    return response
+  }
+
+  /**
+   * 获取关系详情
+   * @param {string} conversationId - 对话ID
+   * @param {string} source - 源实体ID
+   * @param {string} target - 目标实体ID
+   * @returns {Promise<Object>} 关系详情
+   */
+  async getRelation(conversationId, source, target) {
+    const response = await api.get(`/api/conversations/${conversationId}/graph/relations`, {
+      params: { source, target }
     })
     return response
   }

@@ -53,9 +53,21 @@ export const useGraphStore = defineStore('graph', () => {
   }
 
   /**
+   * 获取关系详情
+   */
+  async function getRelation(conversationId, source, target) {
+    try {
+      return await graphService.getRelation(conversationId, source, target)
+    } catch (err) {
+      error.value = err
+      throw err
+    }
+  }
+
+  /**
    * 查询知识图谱
    */
-  async function query(conversationId, queryText, mode = 'mix') {
+  async function query(conversationId, queryText, mode = 'naive') {
     querying.value = true
     error.value = null
     queryResult.value = null
@@ -107,6 +119,7 @@ export const useGraphStore = defineStore('graph', () => {
     // Actions
     loadGraph,
     getEntity,
+    getRelation,
     query,
     clearGraph,
     reset

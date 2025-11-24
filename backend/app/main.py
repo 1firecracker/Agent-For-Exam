@@ -5,7 +5,7 @@ from app.api import conversations, documents, graph, images, exercises
 
 app = FastAPI(
     title="Agent for Exam",
-    description="基于 LightRAG 的智能考试助手系统",
+    description="基于 LightRAG 的 Web 应用程序",
     version="1.0.0"
 )
 
