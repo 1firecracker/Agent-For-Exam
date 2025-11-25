@@ -205,7 +205,7 @@
           </el-button>
         </div>
 
-        <!-- 当前题目展示 -->
+        <!-- 当前题目展示（整合主题干和子题目） -->
         <div v-if="currentQuestion" class="current-question">
           <div class="question-header">
             <h3>{{ currentQuestion.id }}</h3>
@@ -219,10 +219,10 @@
             </div>
           </div>
 
-          <!-- 题目内容（渲染HTML） -->
-          <div class="question-stem" v-html="parseQuestionContent(currentQuestion.stem)"></div>
+          <!-- 整合的题目内容区域 -->
+          <div class="unified-question-content" v-html="renderFullQuestion(currentQuestion)"></div>
 
-          <!-- 选择题选项 -->
+          <!-- 选择题选项（如果有） -->
           <div v-if="currentQuestion.options && currentQuestion.options.length > 0" class="question-options">
             <div 
               v-for="(opt, idx) in currentQuestion.options" 
@@ -235,11 +235,11 @@
           </div>
 
           <!-- 答案 -->
-          <div v-if="currentQuestion.answer" class="question-answer">
+          <div v-if="currentQuestion.answer && currentQuestion.answer !== '（待补充）'" class="question-answer">
             <el-divider />
             <div class="answer-section">
               <strong>答案：</strong>
-              <span v-html="parseQuestionContent(currentQuestion.answer)"></span>
+              <div v-html="parseQuestionContent(currentQuestion.answer)"></div>
             </div>
           </div>
 
@@ -247,20 +247,20 @@
           <div v-if="currentQuestion.explanation" class="question-explanation">
             <div class="explanation-section">
               <strong>解析：</strong>
-              <span v-html="parseQuestionContent(currentQuestion.explanation)"></span>
+              <div v-html="parseQuestionContent(currentQuestion.explanation)"></div>
             </div>
           </div>
 
-          <!-- 知识点 -->
-          <div v-if="currentQuestion.knowledge_points && currentQuestion.knowledge_points.length" class="question-knowledge">
+          <!-- 知识点汇总 -->
+          <div v-if="getAllKnowledgePoints(currentQuestion).length" class="question-knowledge">
             <el-divider />
             <div class="knowledge-section">
               <strong>知识点：</strong>
               <el-tag 
-                v-for="(kp, idx) in currentQuestion.knowledge_points" 
+                v-for="(kp, idx) in getAllKnowledgePoints(currentQuestion)" 
                 :key="idx"
                 size="small"
-                style="margin-right: 4px;"
+                style="margin-right: 4px; margin-bottom: 4px;"
               >
                 {{ kp }}
               </el-tag>
@@ -461,6 +461,84 @@ const prevQuestion = () => {
   if (currentQuestionIndex.value > 0) {
     currentQuestionIndex.value--
   }
+}
+
+// 数字转罗马数字（用于嵌套子题目标签）
+const toRoman = (num) => {
+  const romanNumerals = ['i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x']
+  return romanNumerals[num - 1] || num.toString()
+}
+
+// 递归渲染子题目为 HTML
+const renderSubQuestions = (subQuestions, indent = 1) => {
+  if (!subQuestions || subQuestions.length === 0) return ''
+  
+  const indentPx = indent * 24
+  let html = ''
+  
+  subQuestions.forEach((sq, idx) => {
+    const label = sq.label || String.fromCharCode(96 + idx + 1) // a, b, c...
+    const score = sq.score ? `(${sq.score}分)` : ''
+    
+    html += `<div class="sub-q-item" style="margin-left: ${indentPx}px; margin-top: 12px;">`
+    html += `<span class="sub-q-label">(${label})</span> ${score} `
+    html += `<span class="sub-q-stem">${parseQuestionContent(sq.stem)}</span>`
+    
+    // 递归渲染嵌套子题目
+    if (sq.sub_questions && sq.sub_questions.length > 0) {
+      html += renderSubQuestions(sq.sub_questions, indent + 1)
+    }
+    
+    html += '</div>'
+  })
+  
+  return html
+}
+
+// 渲染完整题目（主题干 + 子题目）
+const renderFullQuestion = (question) => {
+  if (!question) return ''
+  
+  let html = ''
+  
+  // 主题干
+  html += `<div class="main-stem">${parseQuestionContent(question.stem)}</div>`
+  
+  // 子题目
+  if (question.sub_questions && question.sub_questions.length > 0) {
+    html += '<div class="sub-questions-area">'
+    html += renderSubQuestions(question.sub_questions)
+    html += '</div>'
+  }
+  
+  return html
+}
+
+// 递归收集所有知识点（去重）
+const getAllKnowledgePoints = (question) => {
+  const kpSet = new Set()
+  
+  // 主题知识点
+  if (question.knowledge_points) {
+    question.knowledge_points.forEach(kp => kpSet.add(kp))
+  }
+  
+  // 递归收集子题目知识点
+  const collectFromSubs = (subs) => {
+    if (!subs) return
+    subs.forEach(sq => {
+      if (sq.knowledge_points) {
+        sq.knowledge_points.forEach(kp => kpSet.add(kp))
+      }
+      if (sq.sub_questions) {
+        collectFromSubs(sq.sub_questions)
+      }
+    })
+  }
+  
+  collectFromSubs(question.sub_questions)
+  
+  return Array.from(kpSet)
 }
 
 const parseQuestionContent = (content) => {
@@ -1289,6 +1367,50 @@ onUnmounted(() => {
 
 .questions-summary :deep(.el-descriptions__content) {
   color: #303133;
+}
+
+/* 整合题目内容样式 */
+.unified-question-content {
+  font-size: 15px;
+  line-height: 1.9;
+  color: #303133;
+}
+
+.unified-question-content :deep(.main-stem) {
+  margin-bottom: 16px;
+  font-size: 15px;
+}
+
+.unified-question-content :deep(.sub-questions-area) {
+  margin-top: 16px;
+}
+
+.unified-question-content :deep(.sub-q-item) {
+  margin-bottom: 12px;
+  line-height: 1.8;
+}
+
+.unified-question-content :deep(.sub-q-label) {
+  font-weight: 600;
+  color: #409eff;
+  margin-right: 4px;
+}
+
+.unified-question-content :deep(.sub-q-stem) {
+  color: #303133;
+}
+
+/* LaTeX 公式在整合内容中的样式 */
+.unified-question-content :deep(.math-inline) {
+  font-family: 'Times New Roman', 'KaTeX_Main', serif;
+  font-style: italic;
+}
+
+.unified-question-content :deep(.math-block) {
+  display: block;
+  margin: 16px 0;
+  text-align: center;
+  font-family: 'Times New Roman', 'KaTeX_Main', serif;
 }
 </style>
 

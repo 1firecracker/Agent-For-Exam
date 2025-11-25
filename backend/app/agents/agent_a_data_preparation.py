@@ -443,6 +443,8 @@ def run_agent_a(conversation_id: str, file_paths: List[str] = None) -> QuestionB
 
     aggregated_texts = []
     all_questions: List[Question] = []
+    max_retries = 2  # 解析失败时最多重试次数
+    
     for md_path in md_files:
         try:
             with open(md_path, "r", encoding="utf-8") as f:
@@ -455,11 +457,21 @@ def run_agent_a(conversation_id: str, file_paths: List[str] = None) -> QuestionB
         source_name = os.path.splitext(os.path.basename(md_path))[0]
         relative_name = os.path.relpath(md_path, os.path.join(BASE_DIR, "uploads"))
 
-        llm_items = extract_questions_via_llm(content, conversation_id, source_name)
+        # 带重试的解析逻辑
+        llm_items = None
+        for retry in range(max_retries + 1):
+            attempt_name = f"{source_name}_retry{retry}" if retry > 0 else source_name
+            llm_items = extract_questions_via_llm(content, conversation_id, attempt_name)
+            if llm_items:
+                break
+            if retry < max_retries:
+                print(f"[🔄 解析结果为空，正在重试 {retry + 1}/{max_retries}] {md_path}")
+                time.sleep(1)  # 重试前等待 1 秒
+        
         if not llm_items:
-            print(f"[⚠️ LLM 未从 {md_path} 中解析到题目]")
+            print(f"[❌ 重试 {max_retries} 次后仍未解析到题目] {md_path}")
             continue
-        relative_name = os.path.relpath(md_path, os.path.join(BASE_DIR, "uploads"))
+            
         questions = _convert_items_to_questions(llm_items, relative_name)
         all_questions.extend(questions)
         print(f"✅ {md_path} 解析得到 {len(questions)} 道题")

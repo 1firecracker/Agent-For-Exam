@@ -561,31 +561,29 @@ class ExerciseService:
     def _clear_generated_cache(self, conversation_id: str):
         """
         清除指定会话的生成题库缓存（磁盘文件和内存状态）
+        仅清理指定子目录，保留根目录下的文件（知识图谱等）
         """
-        import os
         from app.agents.database.question_bank_storage import BASE_DATA_DIR
         
         # 清除内存缓存
         shared_state.reset()
         
-        # 清除磁盘题库缓存，但保留 LightRAG 的工作空间目录
-        new_root = Path(BASE_DATA_DIR) / conversation_id
-        protected = {conversation_id}  # LightRAG 会在该子目录下存储知识图谱
-        if new_root.exists():
-            for entry in new_root.iterdir():
-                if entry.name in protected:
-                    continue
-                try:
-                    if entry.is_dir():
-                        shutil.rmtree(entry)
-                    else:
-                        entry.unlink()
-                    print(f"[🗑️ 已清除缓存] {entry}")
-                except Exception as e:
-                    print(f"[⚠️ 清除缓存失败] {entry}: {e}")
+        # 仅清理这些子目录，不删除根目录下的文件
+        dirs_to_clear = ['quiz', 'generated', 'corrected', 'graded', 'debug', 'submissions', 'learning_advice', 'grading_reports']
+        
+        base_dir = Path(BASE_DATA_DIR) / conversation_id
+        if base_dir.exists():
+            for dir_name in dirs_to_clear:
+                target_dir = base_dir / dir_name
+                if target_dir.exists() and target_dir.is_dir():
+                    try:
+                        shutil.rmtree(target_dir)
+                        print(f"[🗑️ 已清除缓存] {target_dir}")
+                    except Exception as e:
+                        print(f"[⚠️ 清除缓存失败] {target_dir}: {e}")
 
-        # 清理派生目录（conversation_id + suffix）
-        legacy_suffixes = ['generated', 'corrected', 'graded']
+        # 清理派生目录（conversation_id_suffix）
+        legacy_suffixes = ['_generated', '_corrected', '_graded']
         for suffix in legacy_suffixes:
             legacy_dir = Path(BASE_DATA_DIR) / f"{conversation_id}{suffix}"
             if legacy_dir.exists():
@@ -933,142 +931,6 @@ class ExerciseService:
                 print(f"[✅ 删除PDF报告] {pdf_file}")
         
         print(f"[✅ 删除记录成功] {record_id}")
-
-
-    def generate_exam_paper_pdf(self, conversation_id: str) -> str:
-        """
-        生成试卷PDF
-        返回PDF文件的绝对路径
-        """
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib import colors
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
-        from reportlab.lib.units import cm
-        from reportlab.lib.enums import TA_LEFT, TA_CENTER
-        
-        # 加载题库（使用HTML格式用于显示）
-        from app.agents.database.question_bank_storage import load_question_bank_by_format
-        qb = load_question_bank_by_format(conversation_id, "html")
-        
-        if not qb or not qb.questions:
-            raise FileNotFoundError(f"未找到题库: {conversation_id}")
-        
-        # 创建PDF目录
-        base_id = conversation_id.replace("_generated", "").replace("_corrected", "").replace("_graded", "")
-        pdf_dir = Path(config.settings.data_dir) / base_id / "generated"
-        pdf_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 生成PDF文件名
-        timestamp_str = datetime.now().strftime('%Y%m%d%H%M%S')
-        pdf_filename = f"exam_paper_{timestamp_str}.pdf"
-        pdf_path = pdf_dir / pdf_filename
-        
-        # 注册中文字体
-        try:
-            font_path = "C:/Windows/Fonts/msyh.ttc"  # 微软雅黑
-            pdfmetrics.registerFont(TTFont('msyh', font_path))
-            font_name = 'msyh'
-        except:
-            try:
-                font_path = "C:/Windows/Fonts/simhei.ttf"  # 黑体
-                pdfmetrics.registerFont(TTFont('simhei', font_path))
-                font_name = 'simhei'
-            except:
-                font_name = 'Helvetica'
-        
-        # 创建PDF文档
-        doc = SimpleDocTemplate(
-            str(pdf_path),
-            pagesize=A4,
-            rightMargin=2*cm,
-            leftMargin=2*cm,
-            topMargin=2*cm,
-            bottomMargin=2*cm
-        )
-        elements = []
-        
-        # 样式
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle(
-            'ExamTitle',
-            parent=styles['Heading1'],
-            fontName=font_name,
-            fontSize=18,
-            textColor=colors.HexColor('#1a73e8'),
-            spaceAfter=20,
-            alignment=TA_CENTER
-        )
-        question_title_style = ParagraphStyle(
-            'QuestionTitle',
-            parent=styles['Heading2'],
-            fontName=font_name,
-            fontSize=12,
-            textColor=colors.HexColor('#333333'),
-            spaceAfter=8,
-            spaceBefore=12
-        )
-        body_style = ParagraphStyle(
-            'QuestionBody',
-            parent=styles['BodyText'],
-            fontName=font_name,
-            fontSize=10,
-            textColor=colors.HexColor('#444444'),
-            leading=14
-        )
-        
-        # 标题
-        elements.append(Paragraph("考试试卷", title_style))
-        elements.append(Spacer(1, 0.5*cm))
-        
-        # 试卷信息
-        info_text = f"题目数量: {len(qb.questions)} 题 | 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        elements.append(Paragraph(info_text, body_style))
-        elements.append(Spacer(1, 0.8*cm))
-        
-        # 遍历所有题目
-        for idx, q in enumerate(qb.questions, 1):
-            # 题目标题
-            q_title = f"{idx}. {q.id or f'第{idx}题'}"
-            if q.question_type:
-                q_title += f" ({q.question_type})"
-            if q.difficulty:
-                difficulty_map = {"easy": "简单", "medium": "中等", "hard": "困难"}
-                q_title += f" [难度: {difficulty_map.get(q.difficulty, q.difficulty)}]"
-            
-            elements.append(Paragraph(q_title, question_title_style))
-            
-            # 题干（支持HTML标签）
-            stem_text = q.stem.replace('\n', '<br/>')
-            elements.append(Paragraph(stem_text, body_style))
-            elements.append(Spacer(1, 0.3*cm))
-            
-            # 选项
-            if q.options and len(q.options) > 0:
-                for opt_idx, option in enumerate(q.options):
-                    opt_label = chr(65 + opt_idx)  # A, B, C, D...
-                    opt_text = f"{opt_label}. {option}"
-                    elements.append(Paragraph(opt_text, body_style))
-                elements.append(Spacer(1, 0.3*cm))
-            
-            # 答题区域提示
-            elements.append(Paragraph("【答案】:", body_style))
-            elements.append(Spacer(1, 1*cm))
-            
-            # 分隔线
-            if idx < len(qb.questions):
-                elements.append(Spacer(1, 0.5*cm))
-        
-        # 生成PDF
-        try:
-            doc.build(elements)
-            print(f"[✅ 试卷PDF生成成功] {pdf_path}")
-            return str(pdf_path)
-        except Exception as e:
-            print(f"[❌ 试卷PDF生成失败] {e}")
-            raise
 
 
 

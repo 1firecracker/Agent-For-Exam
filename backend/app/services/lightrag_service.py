@@ -42,9 +42,8 @@ class LightRAGService:
         if conversation_id in self._lightrag_instances and self._initialized_instances.get(conversation_id, False):
             return self._lightrag_instances[conversation_id]
         
-        # 为每个对话创建独立的工作目录
-        base_working_dir = Path(config.settings.lightrag_working_dir)
-        working_dir = base_working_dir.parent / conversation_id
+        # 直接使用 data/<conversation_id> 作为工作目录，知识图谱文件直接保存在此目录下
+        working_dir = Path(config.settings.data_dir) / conversation_id
         working_dir.mkdir(parents=True, exist_ok=True)
         
         # 配置 LLM 函数
@@ -53,7 +52,7 @@ class LightRAGService:
         # 配置 Embedding 函数
         embedding_func = self._get_embedding_func()
         
-        # 创建 LightRAG 实例
+        # 创建 LightRAG 实例（不设置 workspace，避免创建嵌套子目录）
         lightrag = LightRAG(
             working_dir=str(working_dir),
             llm_model_func=llm_func,
@@ -62,10 +61,9 @@ class LightRAGService:
             vector_storage=config.settings.lightrag_vector_storage,
             graph_storage=config.settings.lightrag_graph_storage,
             doc_status_storage=config.settings.lightrag_doc_status_storage,
-            chunk_token_size=600,  # 减小块大小，避免超时（从 1200 降到 600）
-            chunk_overlap_token_size=50,  # 减小重叠（从 100 降到 50）
-            workspace=conversation_id,  # 使用 conversation_id 作为 workspace
-            default_llm_timeout=config.settings.timeout,  # 使用配置的超时时间（400秒）
+            chunk_token_size=600,
+            chunk_overlap_token_size=50,
+            default_llm_timeout=config.settings.timeout,
         )
         
         # 初始化存储
@@ -91,12 +89,25 @@ class LightRAGService:
             api_key = config.settings.llm_binding_api_key
             if not api_key:
                 raise ValueError("LLM_BINDING_API_KEY 未配置")
+
+            llm_host = config.settings.llm_binding_host or ""
+            is_siliconcloud_host = llm_host.startswith("https://api.siliconflow.cn")
             
             # 支持 OpenAI 兼容 API（如硅基流动）
             # 使用 openai_complete_if_cache 函数，支持自定义模型名
             def llm_func(prompt, **kwargs):
                 # 移除可能的冲突参数
                 kwargs.pop('api_base', None)
+
+                if is_siliconcloud_host:
+                    existing_extra_body = kwargs.get("extra_body") or {}
+                    if "thinking_budget" not in existing_extra_body:
+                        extra_body = dict(existing_extra_body)
+                        extra_body["thinking_budget"] = 1024
+                        kwargs["extra_body"] = extra_body
+                    else:
+                        kwargs["extra_body"] = existing_extra_body
+
                 # 使用配置的模型名，传递 base_url 和 api_key
                 return openai_complete_if_cache(
                     model=config.settings.llm_model,

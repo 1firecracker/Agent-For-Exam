@@ -11,8 +11,8 @@ import aiohttp
 import asyncio
 from dotenv import load_dotenv
 from app.agents.shared_state import shared_state
-from app.agents.models.quiz_models import Question, QuestionBank
-from app.agents.database.question_bank_storage import save_question_bank
+from app.agents.models.quiz_models import Question, QuestionBank, SubQuestion
+from app.agents.database.question_bank_storage import save_question_bank, BASE_DATA_DIR
 
 # -----------------------------------------------------------
 # 环境配置
@@ -28,6 +28,31 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
+
+def _save_llm_response(conversation_id: str, section_name: str, prompt: str, response: str):
+    """保存 LLM 的完整请求和响应到 debug 目录"""
+    debug_dir = os.path.join(BASE_DATA_DIR, conversation_id, "debug")
+    os.makedirs(debug_dir, exist_ok=True)
+    
+    # 清理文件名中的非法字符
+    safe_section = re.sub(r'[\\/:*?"<>|]', '_', section_name)
+    file_path = os.path.join(debug_dir, f"agent_e_{safe_section}_response.txt")
+    
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("=" * 80 + "\n")
+        f.write(f"Section: {section_name}\n")
+        f.write("=" * 80 + "\n\n")
+        f.write("【发送的 Prompt】\n")
+        f.write("-" * 40 + "\n")
+        f.write(prompt)
+        f.write("\n\n")
+        f.write("【LLM 原始响应】\n")
+        f.write("-" * 40 + "\n")
+        f.write(response)
+        f.write("\n")
+    
+    print(f"📝 LLM 响应已保存：{file_path}")
+
 def _has_cjk(s: str) -> bool:
     import re
     return bool(re.search(r"[\u4e00-\u9fff]", s or ""))
@@ -35,27 +60,233 @@ def _has_cjk(s: str) -> bool:
 def _detect_language_from_stem(stem: str) -> str:
     return "Chinese" if _has_cjk(stem or "") else "English"
 
+
+def _format_sub_questions(sub_questions, indent=1) -> str:
+    """递归格式化子题目为文本，供 Prompt 使用"""
+    if not sub_questions:
+        return ""
+    
+    lines = []
+    prefix = "  " * indent
+    for sq in sub_questions:
+        label = sq.label if hasattr(sq, 'label') else sq.get('label', '')
+        stem = sq.stem if hasattr(sq, 'stem') else sq.get('stem', '')
+        kps = sq.knowledge_points if hasattr(sq, 'knowledge_points') else sq.get('knowledge_points', [])
+        difficulty = sq.difficulty if hasattr(sq, 'difficulty') else sq.get('difficulty', 'medium')
+        nested = sq.sub_questions if hasattr(sq, 'sub_questions') else sq.get('sub_questions', [])
+        
+        lines.append(f"{prefix}({label}) {stem}")
+        if kps:
+            lines.append(f"{prefix}    知识点: {', '.join(kps)}")
+        if difficulty:
+            lines.append(f"{prefix}    难度: {difficulty}")
+        
+        # 递归处理嵌套子题
+        if nested:
+            lines.append(_format_sub_questions(nested, indent + 1))
+    
+    return "\n".join(lines)
+
+
+def _sub_questions_to_json_example(sub_questions) -> list:
+    """将子题目转换为 JSON 示例结构"""
+    if not sub_questions:
+        return []
+    
+    result = []
+    for sq in sub_questions:
+        label = sq.label if hasattr(sq, 'label') else sq.get('label', '')
+        stem = sq.stem if hasattr(sq, 'stem') else sq.get('stem', '')
+        kps = sq.knowledge_points if hasattr(sq, 'knowledge_points') else sq.get('knowledge_points', [])
+        difficulty = sq.difficulty if hasattr(sq, 'difficulty') else sq.get('difficulty', 'medium')
+        qtype = sq.question_type if hasattr(sq, 'question_type') else sq.get('question_type', 'short_answer')
+        nested = sq.sub_questions if hasattr(sq, 'sub_questions') else sq.get('sub_questions', [])
+        
+        item = {
+            "label": label,
+            "stem": stem,
+            "knowledge_points": kps,
+            "difficulty": difficulty,
+            "question_type": qtype,
+        }
+        if nested:
+            item["sub_questions"] = _sub_questions_to_json_example(nested)
+        result.append(item)
+    
+    return result
+
+
+def _parse_sub_questions_from_dict(sub_list: list) -> list:
+    """从 LLM 返回的字典列表解析为 SubQuestion 对象列表"""
+    if not sub_list or not isinstance(sub_list, list):
+        return []
+    
+    result = []
+    for item in sub_list:
+        if not isinstance(item, dict):
+            continue
+        
+        label = str(item.get("label", "")).strip()
+        stem = str(item.get("stem", "")).strip()
+        if not stem:
+            continue
+        
+        # 递归解析嵌套子题
+        nested = _parse_sub_questions_from_dict(item.get("sub_questions", []))
+        
+        sq = SubQuestion(
+            label=label or "sub",
+            stem=stem,
+            score=int(item.get("score", 0)) if item.get("score") else 0,
+            question_type=str(item.get("question_type", "short_answer")),
+            difficulty=str(item.get("difficulty", "medium")),
+            knowledge_points=item.get("knowledge_points", []) or ["通用知识"],
+            sub_questions=nested
+        )
+        result.append(sq)
+    
+    return result
+
 def _extract_json_array(text: str):
-    # 标准 JSON 数组
-    m = re.search(r"\[\s*(?:\{.*?\}\s*,\s*)*\{.*?\}\s*\]", text, re.S)
-    if m:
-        return json.loads(m.group(0))
-    # 代码块 ```json ... ```
-    m = re.search(r"```(?:json)?\s*(\[\s*.*?\s*\])\s*```", text, re.S)
-    if m:
-        return json.loads(m.group(1))
-    # 全角括号 → 半角再匹配
-    txt2 = text.replace("【", "[").replace("】", "]")
-    m = re.search(r"\[\s*(?:\{.*?\}\s*,\s*)*\{.*?\}\s*\]", txt2, re.S)
-    if m:
-        return json.loads(m.group(0))
-    # 单对象（极少数模型直接给一题）
-    m = re.search(r"\{\s*.*?\s*\}", text, re.S)
-    if m:
+    """从 LLM 输出中提取 JSON 数组，支持嵌套结构（如 sub_questions）"""
+    if not text:
+        return []
+    
+    text = text.strip()
+    
+    def _safe_parse(candidate: str):
+        """尝试解析 JSON，处理常见的 LaTeX 转义问题"""
+        fixed = candidate
+        
+        # 修复 LaTeX 中常见的非法 JSON 转义
+        # \{ \} \( \) 在 LaTeX 中是合法的，但在 JSON 中需要双反斜杠
+        # 注意：只在字符串值内部处理，不影响 JSON 结构
+        latex_escapes = [
+            (r'\{', r'\\{'),
+            (r'\}', r'\\}'),
+            (r'\(', r'\\('),
+            (r'\)', r'\\)'),
+            (r'\[', r'\\['),
+            (r'\]', r'\\]'),
+            (r'\_', r'\\_'),
+            (r'\^', r'\\^'),
+            (r'\&', r'\\&'),
+            (r'\%', r'\\%'),
+            (r'\$', r'\\$'),
+            (r'\#', r'\\#'),
+        ]
+        
+        for old, new in latex_escapes:
+            # 避免重复转义（如果已经是 \\ 开头就跳过）
+            fixed = re.sub(r'(?<!\\)' + re.escape(old), new, fixed)
+        
+        return json.loads(fixed)
+    
+    def _find_balanced_json_array(s: str, start_pos: int = 0) -> str:
+        """使用括号匹配找到完整的 JSON 数组"""
+        # 找到第一个 [
+        arr_start = s.find('[', start_pos)
+        if arr_start == -1:
+            return None
+        
+        bracket_count = 0
+        brace_count = 0
+        in_string = False
+        escape_next = False
+        
+        for i in range(arr_start, len(s)):
+            char = s[i]
+            
+            if escape_next:
+                escape_next = False
+                continue
+            
+            if char == '\\':
+                escape_next = True
+                continue
+            
+            if char == '"':
+                in_string = not in_string
+                continue
+            
+            if not in_string:
+                if char == '[':
+                    bracket_count += 1
+                elif char == ']':
+                    bracket_count -= 1
+                    if bracket_count == 0:
+                        return s[arr_start:i+1]
+                elif char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+        
+        return None
+    
+    # 1. 尝试提取 ```json ... ``` 代码块
+    code_block_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
+    if code_block_match:
+        block_content = code_block_match.group(1).strip()
+        json_str = _find_balanced_json_array(block_content)
+        if json_str:
+            try:
+                return _safe_parse(json_str)
+            except json.JSONDecodeError:
+                pass
+    
+    # 2. 直接在文本中查找 JSON 数组
+    json_str = _find_balanced_json_array(text)
+    if json_str:
         try:
-            return [json.loads(m.group(0))]
+            return _safe_parse(json_str)
+        except json.JSONDecodeError as e:
+            print(f"[⚠️ JSON 解析失败] {e}")
+            # 尝试修复常见问题后重试
+            try:
+                # 移除可能的尾部逗号
+                fixed = re.sub(r',\s*}', '}', json_str)
+                fixed = re.sub(r',\s*]', ']', fixed)
+                return _safe_parse(fixed)
+            except:
+                pass
+    
+    # 3. 全角括号转半角后重试
+    txt2 = text.replace("【", "[").replace("】", "]")
+    json_str = _find_balanced_json_array(txt2)
+    if json_str:
+        try:
+            return _safe_parse(json_str)
         except:
             pass
+    
+    # 4. 尝试解析单个对象
+    brace_start = text.find('{')
+    if brace_start != -1:
+        brace_count = 0
+        in_string = False
+        escape_next = False
+        for i in range(brace_start, len(text)):
+            char = text[i]
+            if escape_next:
+                escape_next = False
+                continue
+            if char == '\\':
+                escape_next = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if not in_string:
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        try:
+                            return [_safe_parse(text[brace_start:i+1])]
+                        except:
+                            break
+    
     return []
 
 
@@ -263,7 +494,7 @@ def build_prompt(section, distribution_model, examples=None, global_difficulty="
     if examples:
         example_snippets = []
         for q in examples[:3]:
-            # 🆕 将样题中的HTML表格转换为Markdown，让LLM更容易理解和模仿
+            # 将样题中的HTML表格转换为Markdown，让LLM更容易理解和模仿
             stem_for_llm = _convert_html_table_to_markdown(q.stem)
             
             snippet = (
@@ -273,6 +504,13 @@ def build_prompt(section, distribution_model, examples=None, global_difficulty="
                 f"难度：{q.difficulty}\n"
                 f"题型：{q.question_type}\n"
             )
+            
+            # 添加子题目信息
+            sub_qs = q.sub_questions if hasattr(q, 'sub_questions') else []
+            if sub_qs:
+                snippet += f"子题目数量：{len(sub_qs)}\n"
+                snippet += f"子题目结构：\n{_format_sub_questions(sub_qs)}\n"
+            
             example_snippets.append(snippet)
         prompt += "\n---\n".join(example_snippets)
 
@@ -281,28 +519,84 @@ def build_prompt(section, distribution_model, examples=None, global_difficulty="
         prompt += f"\n【语言约束】题干（stem）、答案（answer）、解析（explanation）必须使用 {expected_language} 输出；" \
                   f"knowledge_points 字段可以使用中文。"
 
+    # 根据样题是否有子题目，动态生成输出格式示例
+    has_sub_questions = False
+    if examples:
+        for q in examples[:3]:
+            sub_qs = q.sub_questions if hasattr(q, 'sub_questions') else []
+            if sub_qs:
+                has_sub_questions = True
+                break
+    
     prompt += """
 【表格格式说明】
 如果题目需要包含表格数据，请使用Markdown表格格式：
 | 列1 | 列2 | 列3 |
 |-----|-----|-----|
 | 数据1 | 数据2 | 数据3 |
-| 数据4 | 数据5 | 数据6 |
 
 【输出格式示例】
-[
+"""
+    
+    if has_sub_questions:
+        prompt += """[
   {
-    "stem": "题干文本……（包含(a)(b)(c)等子问）\\n如需表格请使用Markdown格式",
-    "options": ["A. ...", "B. ...", "C. ...", "D. ..."],
-    "answer": "正确答案或要点（选择题写选项字母；简答/综合题给出关键步骤与结论，不需要长篇推理）",
-    "explanation": "简要说明正确原因、关键计算/判断边界，避免长篇推理文字",
+    "stem": "主题干文本（简短描述题目背景或总体要求）",
+    "options": [],
+    "answer": "（待补充）或综合答案要点",
+    "explanation": "整体解析说明",
     "difficulty": "easy | medium | hard",
-    "knowledge_points": ["涉及的知识点 1", "知识点 2", "…"],
-    "question_type": "single_choice | short_answer | programming | 算法应用题 | 综合分析题 | 简答题"
+    "knowledge_points": ["涉及的知识点 1", "知识点 2"],
+    "question_type": "short_answer | calculation | comprehensive",
+    "sub_questions": [
+      {
+        "label": "a",
+        "stem": "子问题(a)的具体题干内容",
+        "knowledge_points": ["子题知识点"],
+        "difficulty": "easy | medium | hard",
+        "question_type": "short_answer | calculation",
+        "sub_questions": []
+      },
+      {
+        "label": "b",
+        "stem": "子问题(b)的具体题干内容",
+        "knowledge_points": ["子题知识点"],
+        "difficulty": "easy | medium | hard",
+        "question_type": "calculation",
+        "sub_questions": [
+          {
+            "label": "i",
+            "stem": "嵌套子问题(i)内容",
+            "knowledge_points": ["嵌套子题知识点"],
+            "difficulty": "easy",
+            "question_type": "short_answer",
+            "sub_questions": []
+          }
+        ]
+      }
+    ]
   }
 ]
-只输出 JSON，不要添加解释或其他自然语言。
+注意：
+1. 如果样题有子题目结构，生成的题目也必须包含 sub_questions 数组
+2. 每个子题目必须有独立的 label（如 a/b/c 或 i/ii/iii）、stem、knowledge_points
+3. 子题目可以嵌套（如 c 下面有 i/ii/iii）
 """
+    else:
+        prompt += """[
+  {
+    "stem": "题干文本",
+    "options": ["A. ...", "B. ...", "C. ...", "D. ..."],
+    "answer": "正确答案或要点",
+    "explanation": "简要说明正确原因",
+    "difficulty": "easy | medium | hard",
+    "knowledge_points": ["涉及的知识点 1", "知识点 2"],
+    "question_type": "single_choice | short_answer | calculation"
+  }
+]
+"""
+    
+    prompt += "只输出 JSON，不要添加解释或其他自然语言。\n"
     return prompt
 
 
@@ -357,18 +651,26 @@ async def async_generate_section(session, section, distribution_model, examples=
             {"role": "system", "content": "你是一名高级考试命题专家，擅长生成尺度恰当且覆盖全面的深度试题。"},
             {"role": "user", "content": prompt}
         ],
-        "max_tokens": 3200,   # ↑ 略增
+        "max_tokens": 4000,   # ↑ 略增
         "temperature": 0.6,   # ↓ 略降，提升稳定度与对齐度
         "top_p": 0.95,
     }
 
+    # 获取 conversation_id 用于保存 debug 文件
+    conv_id = section.get("_conversation_id", "unknown")
+    section_title = section.get("title", "unknown").replace(" ", "_")
+    
     try:
         async with session.post(f"{API_URL}/chat/completions", headers=HEADERS, json=payload, timeout=240) as resp:
             res = await resp.json()
             content = res["choices"][0]["message"]["content"]
+            
+            # 保存 LLM 原始响应到 debug 目录
+            _save_llm_response(conv_id, section_title, prompt, content)
+            
             items = _extract_json_array(content)
 
-            # 🆕 将LLM生成的Markdown表格转换为HTML表格
+            # 将LLM生成的Markdown表格转换为HTML表格
             for item in items:
                 if 'stem' in item and item['stem']:
                     item['stem'] = _convert_markdown_table_to_html(item['stem'])
@@ -461,16 +763,17 @@ def run_agent_e(conversation_id: str):
             title_en = TYPE_TITLE_EN.get(t, t if _has_cjk(t) is False else "Section")
             expected_language = _detect_language_from_stem(getattr(tq, "stem", "") or "")
             sections.append({
-                "title": f"{title_en} Section",
+                "title": f"{title_en} Section_{idx}",
                 "question_ranges": [{"from": idx, "to": idx}],
                 "score": None,
                 "expected_kps": tq.knowledge_points if getattr(tq, "knowledge_points", None) else None,
                 "target_difficulty_hint": "保持与样例相同层级，但在深度与综合性上提高",
-                "expected_language": expected_language,  # ← 新增：每题的期望语种
+                "expected_language": expected_language,
+                "_conversation_id": conversation_id,  # 用于保存 debug 文件
             })
         structure_model = {"sections": sections}
     else:
-        # 无模板则保留你的原兜底，顺便修补“sections 为空也视为无效结构”
+        # 无模板则保留你的原兜底，顺便修补"sections 为空也视为无效结构"
         if (not structure_model
             or structure_model.get("section_count", 0) == 0
             or not structure_model.get("sections")):
@@ -485,7 +788,8 @@ def run_agent_e(conversation_id: str):
                 sections.append({
                     "title": f"{t} Section",
                     "question_ranges": [{"from": q_start, "to": q_end}],
-                    "score": None
+                    "score": None,
+                    "_conversation_id": conversation_id,
                 })
                 q_start = q_end + 1
             structure_model = {"sections": sections}
@@ -509,11 +813,14 @@ def run_agent_e(conversation_id: str):
 
     all_sections = asyncio.run(main())
 
-    # 合并生成题目（保持不变）
+    # 合并生成题目
     generated_questions = []
     for sec in all_sections:
         for item in sec:
             try:
+                # 解析子题目
+                sub_questions = _parse_sub_questions_from_dict(item.get("sub_questions", []))
+                
                 q = Question(
                     id=f"GEN_{len(generated_questions)+1:03d}",
                     stem=item.get("stem"),
@@ -522,9 +829,13 @@ def run_agent_e(conversation_id: str):
                     explanation=item.get("explanation"),
                     difficulty=item.get("difficulty", "medium"),
                     knowledge_points=item.get("knowledge_points", ["通用知识"]),
-                    question_type=item.get("question_type", "short_answer")
+                    question_type=item.get("question_type", "short_answer"),
+                    sub_questions=sub_questions
                 )
                 generated_questions.append(q)
+                
+                if sub_questions:
+                    print(f"[✓] 题目 {q.id} 包含 {len(sub_questions)} 个子题目")
             except Exception as e:
                 print(f"[⚠️ 题目解析异常] {e}")
 

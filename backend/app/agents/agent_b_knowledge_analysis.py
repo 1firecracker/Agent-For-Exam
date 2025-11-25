@@ -1,24 +1,18 @@
 # -*- coding: utf-8 -*-
 # ===========================================================
 # 文件：backend/app/agents/agent_b_knowledge_analysis.py
-# 功能：Agent B - 题目关联知识检索（向量库 + 知识图谱）
+# 功能：Agent B - 按整题汇总知识点，查询知识图谱获取相关实体与周边知识
 # ===========================================================
 
 import asyncio
 import json
 import os
-from typing import Dict, List, Tuple
-
-from dotenv import load_dotenv
-from lightrag import QueryParam
+from typing import Dict, List, Set, Tuple
 
 from app.agents.shared_state import shared_state
 from app.agents.database.question_bank_storage import BASE_DATA_DIR, load_question_bank
-from app.agents.models.quiz_models import QuestionBank, SubQuestion
+from app.agents.models.quiz_models import QuestionBank, Question, SubQuestion
 from app.services.graph_service import GraphService
-from app.services.lightrag_service import LightRAGService
-
-load_dotenv()
 
 
 def _normalize_text(value: str) -> str:
@@ -39,36 +33,46 @@ def _ensure_list(items) -> List[str]:
     return normalized
 
 
-def _flatten_questions(qb: QuestionBank) -> Dict[str, Dict[str, List[str]]]:
-    flattened: Dict[str, Dict[str, List[str]]] = {}
+def _collect_all_kps(question: Question) -> List[str]:
+    """递归收集题目及所有子题的知识点，去重后返回"""
+    kps: Set[str] = set()
 
-    def collect_sub_questions(base_key: str, subs: List[SubQuestion]):
+    # 添加主题知识点
+    for kp in _ensure_list(question.knowledge_points or []):
+        kps.add(kp)
+
+    # 递归收集子题知识点
+    def collect_from_subs(subs: List[SubQuestion]):
         if not subs:
             return
-        for index, sub in enumerate(subs, 1):
-            label = _normalize_text(sub.label or "")
-            suffix = label.replace(" ", "") if label else f"sub_{index}"
-            key = f"{base_key}-{suffix}"
-            flattened[key] = {
-                "stem": _normalize_text(sub.stem or ""),
-                "knowledge_points": _ensure_list(sub.knowledge_points or []),
-            }
+        for sub in subs:
+            for kp in _ensure_list(sub.knowledge_points or []):
+                kps.add(kp)
             if sub.sub_questions:
-                collect_sub_questions(key, sub.sub_questions)
+                collect_from_subs(sub.sub_questions)
+
+    if question.sub_questions:
+        collect_from_subs(question.sub_questions)
+
+    return list(kps) if kps else ["通用知识"]
+
+
+def _summarize_questions(qb: QuestionBank) -> Dict[str, Dict]:
+    """按整题汇总，返回 {question_id: {stem, knowledge_points}}"""
+    summarized: Dict[str, Dict] = {}
 
     for idx, question in enumerate(qb.questions, 1):
         qid = _normalize_text(getattr(question, "id", "") or f"Q{idx:03d}")
-        flattened[qid] = {
+        summarized[qid] = {
             "stem": _normalize_text(question.stem or ""),
-            "knowledge_points": _ensure_list(question.knowledge_points or []),
+            "knowledge_points": _collect_all_kps(question),
         }
-        if question.sub_questions:
-            collect_sub_questions(qid, question.sub_questions)
 
-    return flattened
+    return summarized
 
 
 def _build_entity_lookup(entities: List[Dict]) -> Tuple[Dict[str, Dict], List[Dict]]:
+    """构建实体名称索引"""
     lookup: Dict[str, Dict] = {}
     for entity in entities:
         name = entity.get("name") or entity.get("entity_id") or ""
@@ -79,21 +83,20 @@ def _build_entity_lookup(entities: List[Dict]) -> Tuple[Dict[str, Dict], List[Di
 
 
 def _collect_relations_map(relations: List[Dict]) -> Dict[str, List[Dict]]:
+    """构建实体到关系的映射"""
     adjacency: Dict[str, List[Dict]] = {}
     for relation in relations:
-        source = relation.get("source") or relation.get("src_id")
-        target = relation.get("target") or relation.get("tgt_id")
+        source = relation.get("source") or relation.get("src_id") or ""
+        target = relation.get("target") or relation.get("tgt_id") or ""
         for node in (source, target):
-            node_id = _normalize_text(node or "")
-            if node_id:
-                adjacency.setdefault(node_id, []).append(
-                    {
-                        "source": source,
-                        "target": target,
-                        "type": relation.get("type") or relation.get("relation_type") or "",
-                        "description": relation.get("description", ""),
-                    }
-                )
+            node_key = _normalize_key(node)
+            if node_key:
+                adjacency.setdefault(node_key, []).append({
+                    "source": source,
+                    "target": target,
+                    "type": relation.get("type") or relation.get("relation_type") or "",
+                    "description": relation.get("description", ""),
+                })
     return adjacency
 
 
@@ -102,14 +105,54 @@ def _find_entity(
     lookup: Dict[str, Dict],
     all_entities: List[Dict],
 ) -> Dict | None:
+    """精确匹配 + 模糊匹配查找实体"""
     normalized = _normalize_key(knowledge_point)
     if normalized in lookup:
         return lookup[normalized]
+    # 模糊匹配：包含关系
     for entity in all_entities:
         candidate = _normalize_key(entity.get("name") or entity.get("entity_id") or "")
         if candidate and (normalized in candidate or candidate in normalized):
             return entity
     return None
+
+
+def _get_neighbor_entities(
+    entity_name: str,
+    relation_map: Dict[str, List[Dict]],
+    entity_lookup: Dict[str, Dict],
+    max_neighbors: int = 5,
+) -> List[Dict]:
+    """获取实体的邻居实体信息"""
+    neighbors = []
+    visited = set()
+    entity_key = _normalize_key(entity_name)
+    relations = relation_map.get(entity_key, [])
+
+    for rel in relations[:max_neighbors * 2]:  # 多取一些再去重
+        # 找到关系的另一端
+        source = rel.get("source", "")
+        target = rel.get("target", "")
+        other = target if _normalize_key(source) == entity_key else source
+
+        other_key = _normalize_key(other)
+        if other_key in visited or not other_key:
+            continue
+        visited.add(other_key)
+
+        # 查找邻居实体的详细信息
+        neighbor_entity = entity_lookup.get(other_key, {})
+        neighbors.append({
+            "entity": other,
+            "description": neighbor_entity.get("description", ""),
+            "relation_type": rel.get("type", ""),
+            "relation_desc": rel.get("description", ""),
+        })
+
+        if len(neighbors) >= max_neighbors:
+            break
+
+    return neighbors
 
 
 def _match_graph_data(
@@ -118,56 +161,45 @@ def _match_graph_data(
     all_entities: List[Dict],
     relation_map: Dict[str, List[Dict]],
     max_relations: int = 5,
+    max_neighbors: int = 5,
 ) -> List[Dict]:
+    """根据知识点匹配图谱实体、关系及周边知识"""
     matches = []
     visited = set()
+
     for kp in knowledge_points:
         entity = _find_entity(kp, lookup, all_entities)
         if not entity:
             continue
-        entity_id = entity.get("entity_id") or entity.get("name")
-        if not entity_id or entity_id in visited:
+
+        entity_name = entity.get("name") or entity.get("entity_id") or ""
+        entity_key = _normalize_key(entity_name)
+        if not entity_key or entity_key in visited:
             continue
-        visited.add(entity_id)
-        normalized_id = _normalize_text(entity_id)
-        relations = relation_map.get(normalized_id, [])[:max_relations]
-        matches.append(
-            {
-                "knowledge_point": kp,
-                "entity": entity.get("name") or entity_id,
-                "description": entity.get("description", ""),
-                "relations": relations,
-                "source_documents": entity.get("source_documents", []),
-            }
-        )
-    return matches
+        visited.add(entity_key)
 
+        # 获取关系
+        relations = relation_map.get(entity_key, [])[:max_relations]
 
-async def _query_vector_context(lightrag, stem: str, top_k: int) -> List[Dict]:
-    if not stem:
-        return []
-    param = QueryParam(mode="local")
-    param.top_k = top_k
-    param.chunk_top_k = top_k
-    result = await lightrag.aquery_data(stem, param)
-    if not isinstance(result, dict):
-        return []
-    payload = result.get("data") or {}
-    chunks = payload.get("chunks") or []
-    matches = []
-    for chunk in chunks[:top_k]:
-        matches.append(
-            {
-                "chunk_id": chunk.get("chunk_id"),
-                "file_path": chunk.get("file_path"),
-                "content": chunk.get("content", ""),
-                "reference_id": chunk.get("reference_id"),
-            }
+        # 获取邻居实体（周边知识）
+        neighbors = _get_neighbor_entities(
+            entity_name, relation_map, lookup, max_neighbors
         )
+
+        matches.append({
+            "knowledge_point": kp,
+            "entity": entity_name,
+            "description": entity.get("description", ""),
+            "relations": relations,
+            "neighbors": neighbors,
+            "source_documents": entity.get("source_documents", []),
+        })
+
     return matches
 
 
 def _save_related_knowledge(conversation_id: str, related_payload: Dict[str, Dict]) -> str:
+    """保存关联知识到 JSON 文件"""
     target_dir = os.path.join(BASE_DATA_DIR, conversation_id)
     if not os.path.exists(target_dir):
         os.makedirs(target_dir, exist_ok=True)
@@ -179,61 +211,45 @@ def _save_related_knowledge(conversation_id: str, related_payload: Dict[str, Dic
 
 async def _collect_related_knowledge(
     conversation_id: str,
-    flattened_questions: Dict[str, Dict[str, List[str]]],
-    vector_top_k: int = 5,
-    max_concurrent: int = 3,
+    summarized_questions: Dict[str, Dict],
 ) -> Dict[str, Dict]:
+    """收集每道题的知识图谱相关信息"""
     graph_service = GraphService()
-    lightrag_service = LightRAGService()
     has_docs = graph_service.check_has_documents_fast(conversation_id)
 
-    lightrag = None
     entities: List[Dict] = []
     relations: List[Dict] = []
     if has_docs:
-        lightrag = await lightrag_service.get_lightrag_for_conversation(conversation_id)
         entities = await graph_service.get_all_entities(conversation_id)
         relations = await graph_service.get_all_relations(conversation_id)
+        print(f"📊 知识图谱加载完成：{len(entities)} 个实体，{len(relations)} 条关系")
+    else:
+        print("⚠️ 未找到知识图谱文档，将返回空匹配结果")
 
     entity_lookup, entity_list = _build_entity_lookup(entities)
     relation_map = _collect_relations_map(relations)
 
-    semaphore = asyncio.Semaphore(max_concurrent)
-    tasks = []
+    result = {}
+    for qid, payload in summarized_questions.items():
+        kps = payload.get("knowledge_points", [])
+        graph_matches = _match_graph_data(
+            kps, entity_lookup, entity_list, relation_map
+        )
+        result[qid] = {
+            "knowledge_points": kps,
+            "graph_matches": graph_matches,
+        }
+        print(f"  ✓ 题目 {qid}: {len(kps)} 个知识点 → {len(graph_matches)} 个匹配")
 
-    async def process_item(key: str, payload: Dict[str, List[str]]):
-        async with semaphore:
-            vector_matches: List[Dict] = []
-            if lightrag is not None:
-                vector_matches = await _query_vector_context(
-                    lightrag, payload.get("stem", ""), vector_top_k
-                )
-            graph_matches = _match_graph_data(
-                payload.get("knowledge_points", []),
-                entity_lookup,
-                entity_list,
-                relation_map,
-            )
-            return key, {
-                "vector_matches": vector_matches,
-                "graph_matches": graph_matches,
-            }
-    i = 0
-    for key, payload in flattened_questions.items():
-        print(f"第{i}个子题目正在处理")
-        i += 1
-        tasks.append(process_item(key, payload))
-
-    gathered = await asyncio.gather(*tasks)
-    return {key: value for key, value in gathered}
+    return result
 
 
 def run_agent_b(conversation_id: str):
     """
     Agent B：
-    从题库抽取最小粒度题目 → 查询向量知识库 / 知识图谱 → 保存 related_knowledge.json
+    按整题汇总知识点 → 查询知识图谱 → 保存 related_knowledge.json
     """
-    print(f"🧩 [Agent B] 开始关联知识检索，会话ID: {conversation_id}")
+    print(f"🧩 [Agent B] 开始知识图谱检索，会话ID: {conversation_id}")
 
     qb: QuestionBank = shared_state.question_bank
     if qb is None or not qb.questions:
@@ -244,17 +260,14 @@ def run_agent_b(conversation_id: str):
         print("❌ 无可处理题库，Agent B 终止。")
         return None
 
-    flattened = _flatten_questions(qb)
-    if not flattened:
-        print("⚠️ 题库无法展开子题，Agent B 终止。")
-        return None
+    summarized = _summarize_questions(qb)
+    print(f"📋 共 {len(summarized)} 道题目待处理")
 
     related_map = asyncio.run(
-        _collect_related_knowledge(conversation_id, flattened)
+        _collect_related_knowledge(conversation_id, summarized)
     )
     file_path = _save_related_knowledge(conversation_id, related_map)
 
     shared_state.related_knowledge_path = file_path
     print(f"✅ Agent B 完成，关联知识已保存：{file_path}")
-    print(f"📌 记录数量：{len(related_map)}")
     return related_map
