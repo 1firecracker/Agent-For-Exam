@@ -61,7 +61,7 @@
           :http-request="handleUpload"
           :before-upload="handleBeforeUpload"
           :multiple="true"
-          :limit="5"
+          :limit="20"
           :show-file-list="false"
           :disabled="docStore.uploading"
         >

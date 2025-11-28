@@ -1,4 +1,5 @@
 """文档服务，处理文档上传、解析、LightRAG 集成"""
+import asyncio
 import json
 import re
 import shutil
@@ -13,6 +14,13 @@ from app.services.conversation_service import ConversationService
 from app.services.lightrag_service import LightRAGService
 from app.storage.file_manager import FileManager
 from app.utils.document_parser import DocumentParser
+
+# 全局信号量：限制同时处理的文档数量（避免 LightRAG 并发冲突）
+_processing_semaphore = asyncio.Semaphore(1)  # 同一时间只处理1个文档
+# 处理队列锁：确保队列操作的原子性
+_queue_lock = asyncio.Lock()
+# 等待队列：{ conversation_id: [document_id, ...] }
+_processing_queue: Dict[str, List[str]] = {}
 
 
 class DocumentService:
@@ -260,53 +268,82 @@ class DocumentService:
     async def process_document(self, conversation_id: str, document_id: str):
         """处理文档：解析文本并插入 LightRAG（异步后台任务）
         
+        使用信号量控制并发，确保同一时间只有一个文档在处理，
+        避免 LightRAG 并发写入冲突。
+        
         Args:
             conversation_id: 对话ID
             document_id: 文档ID
         """
-        # 更新状态为处理中
-        status = self._load_status(conversation_id)
-        if document_id in status.get("documents", {}):
-            status["documents"][document_id]["status"] = "processing"
-            self._save_status(conversation_id, status)
+        global _processing_queue
         
-        try:
-            # 获取文件路径
-            file_path = self.file_manager.get_file_path(conversation_id, document_id)
-            if not file_path or not file_path.exists():
-                raise FileNotFoundError(f"文件不存在: {document_id}")
+        # 将文档加入等待队列
+        async with _queue_lock:
+            if conversation_id not in _processing_queue:
+                _processing_queue[conversation_id] = []
+            if document_id not in _processing_queue[conversation_id]:
+                _processing_queue[conversation_id].append(document_id)
+            queue_position = _processing_queue[conversation_id].index(document_id) + 1
+            print(f"📋 文档 {document_id[:8]}... 加入队列，位置: {queue_position}")
+        
+        # 使用信号量控制并发（同一时间只处理1个文档）
+        async with _processing_semaphore:
+            print(f"🔄 开始处理文档: {document_id[:8]}...")
             
-            # 解析文档，提取文本
-            text = self.document_parser.extract_text(str(file_path))
-            
-            if not text or not text.strip():
-                raise ValueError("文档解析后文本内容为空")
-            
-            # 清理 base64 字符串并保存
-            cleaned_text, base64_map = self._clean_base64_and_save(text, conversation_id)
-            
-            # 插入到 LightRAG（使用清理后的文本）
-            track_id = await self.lightrag_service.insert_document(
-                conversation_id=conversation_id,
-                text=cleaned_text,
-                doc_id=document_id
-            )
-            
-            # 更新状态为完成
+            # 更新状态为处理中
             status = self._load_status(conversation_id)
             if document_id in status.get("documents", {}):
-                status["documents"][document_id]["status"] = "completed"
-                status["documents"][document_id]["lightrag_track_id"] = track_id
+                status["documents"][document_id]["status"] = "processing"
                 self._save_status(conversation_id, status)
-        
-        except Exception as e:
-            # 更新状态为失败
-            status = self._load_status(conversation_id)
-            if document_id in status.get("documents", {}):
-                status["documents"][document_id]["status"] = "failed"
-                status["documents"][document_id]["error"] = str(e)
-                self._save_status(conversation_id, status)
-            raise
+            
+            try:
+                # 获取文件路径
+                file_path = self.file_manager.get_file_path(conversation_id, document_id)
+                if not file_path or not file_path.exists():
+                    raise FileNotFoundError(f"文件不存在: {document_id}")
+                
+                # 解析文档，提取文本
+                text = self.document_parser.extract_text(str(file_path))
+                
+                if not text or not text.strip():
+                    raise ValueError("文档解析后文本内容为空")
+                
+                # 清理 base64 字符串并保存
+                cleaned_text, base64_map = self._clean_base64_and_save(text, conversation_id)
+                
+                # 插入到 LightRAG（使用清理后的文本）
+                track_id = await self.lightrag_service.insert_document(
+                    conversation_id=conversation_id,
+                    text=cleaned_text,
+                    doc_id=document_id
+                )
+                
+                # 更新状态为完成
+                status = self._load_status(conversation_id)
+                if document_id in status.get("documents", {}):
+                    status["documents"][document_id]["status"] = "completed"
+                    status["documents"][document_id]["lightrag_track_id"] = track_id
+                    self._save_status(conversation_id, status)
+                
+                print(f"✅ 文档处理完成: {document_id[:8]}...")
+            
+            except Exception as e:
+                # 更新状态为失败
+                status = self._load_status(conversation_id)
+                if document_id in status.get("documents", {}):
+                    status["documents"][document_id]["status"] = "failed"
+                    status["documents"][document_id]["error"] = str(e)
+                    self._save_status(conversation_id, status)
+                print(f"❌ 文档处理失败: {document_id[:8]}... 错误: {e}")
+                raise
+            finally:
+                # 从队列中移除
+                async with _queue_lock:
+                    if conversation_id in _processing_queue:
+                        if document_id in _processing_queue[conversation_id]:
+                            _processing_queue[conversation_id].remove(document_id)
+                        if not _processing_queue[conversation_id]:
+                            del _processing_queue[conversation_id]
     
     def get_document(self, conversation_id: str, file_id: str) -> Optional[Dict]:
         """获取文档信息

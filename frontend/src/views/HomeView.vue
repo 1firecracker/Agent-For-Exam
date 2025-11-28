@@ -102,7 +102,7 @@
                   :http-request="handleUpload"
                   :before-upload="handleBeforeUpload"
                   :multiple="true"
-                  :limit="5"
+                  :limit="20"
                 >
                   <el-button type="primary">上传文档</el-button>
                   <template #tip>
