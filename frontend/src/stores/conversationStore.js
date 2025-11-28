@@ -133,6 +133,46 @@ export const useConversationStore = defineStore('conversation', () => {
   }
 
   /**
+   * 更新对话信息（重命名、置顶等）
+   */
+  async function updateConversation(conversationId, data) {
+    loading.value = true
+    error.value = null
+    try {
+      const updated = await conversationService.updateConversation(conversationId, data)
+      
+      // 更新本地列表
+      const index = conversations.value.findIndex(c => c.conversation_id === conversationId)
+      if (index !== -1) {
+        conversations.value[index] = updated
+      }
+      
+      // 如果更新了置顶状态，重新排序
+      if (data.pinned !== undefined) {
+        sortConversations()
+      }
+      
+      return updated
+    } catch (err) {
+      error.value = err
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * 对对话列表排序（置顶的在前，然后按更新时间倒序）
+   */
+  function sortConversations() {
+    const pinned = conversations.value.filter(c => c.pinned)
+    const unpinned = conversations.value.filter(c => !c.pinned)
+    pinned.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
+    unpinned.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
+    conversations.value = [...pinned, ...unpinned]
+  }
+
+  /**
    * 清空状态
    */
   function reset() {
@@ -157,7 +197,9 @@ export const useConversationStore = defineStore('conversation', () => {
     loadConversation,
     selectConversation,
     deleteConversation,
+    updateConversation,
     refreshConversation,
+    sortConversations,
     reset
   }
 })

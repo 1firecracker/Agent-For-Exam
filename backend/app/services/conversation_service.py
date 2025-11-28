@@ -101,7 +101,10 @@ class ConversationService:
             对话信息字典，如果不存在返回 None
         """
         metadata = self._load_metadata()
-        return metadata.get("conversations", {}).get(conversation_id)
+        conversation = metadata.get("conversations", {}).get(conversation_id)
+        if conversation and "pinned" not in conversation:
+            conversation["pinned"] = False
+        return conversation
     
     def list_conversations(self, status: Optional[str] = None) -> List[Dict]:
         """获取对话列表
@@ -110,25 +113,37 @@ class ConversationService:
             status: 可选，过滤状态（如 "active", "archived"）
             
         Returns:
-            对话列表
+            对话列表（置顶的排在前面，然后按更新时间倒序）
         """
         metadata = self._load_metadata()
         conversations = list(metadata.get("conversations", {}).values())
         
+        # 确保每个对话都有 pinned 字段
+        for conv in conversations:
+            if "pinned" not in conv:
+                conv["pinned"] = False
+        
         if status:
             conversations = [c for c in conversations if c.get("status") == status]
         
-        # 按更新时间倒序排列
-        conversations.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+        # 排序：置顶的排在前面，然后按更新时间倒序
+        conversations.sort(key=lambda x: (not x.get("pinned", False), x.get("updated_at", "")), reverse=False)
+        # 再按更新时间倒序（在各自分组内）
+        pinned = [c for c in conversations if c.get("pinned", False)]
+        unpinned = [c for c in conversations if not c.get("pinned", False)]
+        pinned.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+        unpinned.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
         
-        return conversations
+        return pinned + unpinned
     
-    def update_conversation(self, conversation_id: str, **kwargs) -> bool:
-        """更新对话信息
+    def update_conversation(self, conversation_id: str, title: Optional[str] = None, pinned: Optional[bool] = None, **kwargs) -> bool:
+        """更新对话信息（重命名、置顶等）
         
         Args:
             conversation_id: 对话ID
-            **kwargs: 要更新的字段
+            title: 新标题（可选）
+            pinned: 是否置顶（可选）
+            **kwargs: 其他要更新的字段
             
         Returns:
             是否更新成功
@@ -139,7 +154,20 @@ class ConversationService:
             return False
         
         conversation = metadata["conversations"][conversation_id]
-        conversation.update(kwargs)
+        
+        # 更新标题
+        if title is not None:
+            conversation["title"] = title
+        
+        # 更新置顶状态
+        if pinned is not None:
+            conversation["pinned"] = pinned
+        
+        # 更新其他字段
+        for key, value in kwargs.items():
+            if value is not None:
+                conversation[key] = value
+        
         conversation["updated_at"] = datetime.utcnow().isoformat() + "Z"
         
         self._save_metadata(metadata)

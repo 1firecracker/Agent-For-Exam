@@ -45,6 +45,17 @@ class ConversationService {
   async deleteConversation(conversationId) {
     await api.delete(`/api/conversations/${conversationId}`)
   }
+
+  /**
+   * 更新对话信息（重命名、置顶等）
+   * @param {string} conversationId - 对话ID
+   * @param {Object} data - 更新数据 { title?: string, pinned?: boolean }
+   * @returns {Promise<Object>} 更新后的对话对象
+   */
+  async updateConversation(conversationId, data) {
+    const response = await api.patch(`/api/conversations/${conversationId}`, data)
+    return response
+  }
 }
 
 export default new ConversationService()

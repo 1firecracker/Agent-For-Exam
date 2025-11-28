@@ -22,22 +22,30 @@
           v-for="conv in convStore.conversations"
           :key="conv.conversation_id"
           class="conversation-item"
-          :class="{ active: conv.conversation_id === convStore.currentConversationId }"
+          :class="{ active: conv.conversation_id === convStore.currentConversationId, pinned: conv.pinned }"
           @click="handleSelectConversation(conv.conversation_id)"
         >
           <div class="conv-info">
-            <div class="conv-title">{{ conv.title }}</div>
+            <div class="conv-title">
+              <el-icon v-if="conv.pinned" class="pin-icon"><Top /></el-icon>
+              {{ conv.title }}
+            </div>
             <div class="conv-meta">
               <span>{{ conv.file_count || 0 }} 个文档</span>
             </div>
           </div>
-          <el-button
-            text
-            type="danger"
-            size="small"
-            :icon="Delete"
-            @click.stop="handleDeleteConversation(conv.conversation_id)"
-          />
+          <el-dropdown trigger="click" @command="(cmd) => handleConversationCommand(cmd, conv)" @click.stop>
+            <el-button text size="small" :icon="More" class="more-btn" @click.stop />
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="rename" :icon="Edit">重命名</el-dropdown-item>
+                <el-dropdown-item command="pin" :icon="Top">
+                  {{ conv.pinned ? '取消置顶' : '置顶' }}
+                </el-dropdown-item>
+                <el-dropdown-item command="delete" :icon="Delete" divided>删除</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
         
         <el-empty 
@@ -46,6 +54,26 @@
           :image-size="80"
         />
       </div>
+      
+      <!-- 重命名对话框 -->
+      <el-dialog
+        v-model="renameDialogVisible"
+        title="重命名对话"
+        width="400px"
+        :close-on-click-modal="false"
+      >
+        <el-input
+          v-model="newConversationTitle"
+          placeholder="请输入新的对话名称"
+          maxlength="50"
+          show-word-limit
+          @keyup.enter="confirmRename"
+        />
+        <template #footer>
+          <el-button @click="renameDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="confirmRename" :loading="renaming">确定</el-button>
+        </template>
+      </el-dialog>
     </el-card>
     
     <!-- 文档管理区域 -->
@@ -162,7 +190,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { Plus, Delete, Upload, Document, WarningFilled } from '@element-plus/icons-vue'
+import { Plus, Delete, Upload, Document, WarningFilled, More, Edit, Top } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useDocumentStore } from '../../stores/documentStore'
@@ -174,6 +202,12 @@ const docStore = useDocumentStore()
 
 const currentDocumentId = ref(null)
 const deletingFileId = ref(null) // 正在删除的文件ID
+
+// 重命名相关
+const renameDialogVisible = ref(false)
+const newConversationTitle = ref('')
+const renamingConversationId = ref(null)
+const renaming = ref(false)
 
 // 知识提取进度列表
 const extractionProgressList = computed(() => {
@@ -229,14 +263,85 @@ const handleSelectConversation = (conversationId) => {
 // 删除对话
 const handleDeleteConversation = async (conversationId) => {
   try {
+    await ElMessageBox.confirm(
+      '确定要删除此对话吗？所有相关数据将被删除，此操作不可恢复。',
+      '确认删除',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+    
     await convStore.deleteConversation(conversationId)
     ElMessage.success('删除成功')
     if (conversationId === currentDocumentId.value) {
       currentDocumentId.value = null
     }
   } catch (error) {
-    console.error('删除对话失败:', error)
-    ElMessage.error('删除对话失败')
+    if (error !== 'cancel') {
+      console.error('删除对话失败:', error)
+      ElMessage.error('删除对话失败')
+    }
+  }
+}
+
+// 处理对话操作命令
+const handleConversationCommand = (command, conv) => {
+  switch (command) {
+    case 'rename':
+      openRenameDialog(conv)
+      break
+    case 'pin':
+      togglePin(conv)
+      break
+    case 'delete':
+      handleDeleteConversation(conv.conversation_id)
+      break
+  }
+}
+
+// 打开重命名对话框
+const openRenameDialog = (conv) => {
+  renamingConversationId.value = conv.conversation_id
+  newConversationTitle.value = conv.title
+  renameDialogVisible.value = true
+}
+
+// 确认重命名
+const confirmRename = async () => {
+  if (!newConversationTitle.value.trim()) {
+    ElMessage.warning('对话名称不能为空')
+    return
+  }
+  
+  renaming.value = true
+  try {
+    await convStore.updateConversation(renamingConversationId.value, {
+      title: newConversationTitle.value.trim()
+    })
+    ElMessage.success('重命名成功')
+    renameDialogVisible.value = false
+  } catch (error) {
+    console.error('重命名失败:', error)
+    ElMessage.error('重命名失败')
+  } finally {
+    renaming.value = false
+  }
+}
+
+// 切换置顶状态
+const togglePin = async (conv) => {
+  try {
+    await convStore.updateConversation(conv.conversation_id, {
+      pinned: !conv.pinned
+    })
+    // 重新加载对话列表以获取正确的排序
+    await convStore.loadConversations()
+    ElMessage.success(conv.pinned ? '已取消置顶' : '已置顶')
+  } catch (error) {
+    console.error('置顶操作失败:', error)
+    ElMessage.error('操作失败')
   }
 }
 
@@ -445,9 +550,24 @@ onUnmounted(() => {
   background-color: #f0f0f0;
 }
 
+.conversation-item:hover .more-btn {
+  opacity: 1;
+}
+
 .conversation-item.active {
   background-color: #ecf5ff;
   border: 1px solid #409eff;
+}
+
+.conversation-item.pinned {
+  background-color: #fdf6ec;
+  border-left: 3px solid #e6a23c;
+}
+
+.conversation-item.pinned.active {
+  background-color: #ecf5ff;
+  border: 1px solid #409eff;
+  border-left: 3px solid #e6a23c;
 }
 
 .conv-info {
@@ -460,6 +580,21 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pin-icon {
+  color: #e6a23c;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.more-btn {
+  opacity: 0;
+  transition: opacity 0.2s;
+  flex-shrink: 0;
 }
 
 .conv-meta {

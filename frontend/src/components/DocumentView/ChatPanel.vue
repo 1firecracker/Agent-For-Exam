@@ -98,9 +98,16 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { Promotion } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { marked } from 'marked'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useGraphStore } from '../../stores/graphStore'
+
+// 配置 marked 选项
+marked.setOptions({
+  breaks: true, // 支持换行
+  gfm: true,    // 支持 GitHub 风格 Markdown
+})
 
 const convStore = useConversationStore()
 const chatStore = useChatStore()
@@ -267,7 +274,7 @@ const hasThinkContent = (text) => {
 const formatThinkContent = (text) => {
   if (!text) return ''
   
-  // 支持 <think> 和 <think> 两种标签
+  // 支持 <think> 和 <redacted_reasoning> 两种标签
   // 先尝试匹配完整的标签对
   let thinkMatch = text.match(/<(?:think|redacted_reasoning)>([\s\S]*?)<\/(?:think|redacted_reasoning)>/i)
   
@@ -282,17 +289,7 @@ const formatThinkContent = (text) => {
   }
   
   let thinkText = thinkMatch[1] || ''
-  
-  // 转义 HTML
-  let html = thinkText
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-  
-  // 应用增强的 Markdown 格式化
-  html = formatEnhancedMarkdown(html)
-  
-  return html
+  return formatEnhancedMarkdown(thinkText)
 }
 
 // 格式化消息，识别警告提示并应用斜体样式，移除 think 标签
@@ -305,187 +302,48 @@ const formatMessageWithWarning = (text) => {
   // 再移除未闭合的开始标签及其内容（流式输出时的情况）
   content = content.replace(/<(?:think|redacted_reasoning)>[\s\S]*$/gi, '')
   
-  // 先转义 HTML
-  let html = content
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+  // 使用 marked 解析 Markdown
+  let html = formatEnhancedMarkdown(content)
   
-  // 处理警告提示（以 ⚠️ 开头，到第一个换行或文本结束）
-  const warningPattern = /(⚠️[^：:]*[：:][^\n]*)/
-  html = html.replace(warningPattern, '<span class="warning-text">$1</span>')
-  
-  // 处理增强的 Markdown 格式
-  html = formatEnhancedMarkdown(html)
+  // 处理警告提示（以 ⚠️ 开头，到第一个换行或文本结束）- 在 HTML 中处理
+  html = html.replace(/(⚠️[^：:]*[：:][^<\n]*)/g, '<span class="warning-text">$1</span>')
   
   return html
 }
 
-// 增强的 Markdown 格式化
+// 使用 marked 库进行 Markdown 格式化
 const formatEnhancedMarkdown = (text) => {
   if (!text) return ''
   
-  let html = text
-  
-  // 代码块（先处理，避免被其他规则影响）
-  html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
-  
-  // 处理表格（在代码块之后，避免代码块内的表格被处理）
-  html = html.replace(/\|(.+)\|\s*\n\|[\s\-|:]+\|\s*\n((?:\|.+\|\s*\n?)+)/g, (match, header, rows) => {
-    const headers = header.split('|').map(h => h.trim()).filter(h => h)
-    if (headers.length === 0) return match
-    const headerHtml = headers.map(h => `<th>${h}</th>`).join('')
-    const rowsHtml = rows.trim().split('\n').filter(row => row.trim()).map(row => {
-      const cells = row.split('|').map(c => c.trim()).filter(c => c)
-      return `<tr>${cells.map(cell => `<td>${cell}</td>`).join('')}</tr>`
-    }).join('')
-    return `<table class="markdown-table"><thead><tr>${headerHtml}</tr></thead><tbody>${rowsHtml}</tbody></table>`
-  })
-  
-  // 标题（#### 到 #）
-  html = html.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>')
-  html = html.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
-  html = html.replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
-  html = html.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>')
-  
-  // 处理无序列表（- 开头）
-  // 按行处理，将连续的列表项组合（跳过已处理的HTML标签）
-  const lines = html.split('\n')
-  const processedLines = []
-  let inList = false
-  let listItems = []
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim()
-    // 跳过已处理的HTML标签（标题、代码块、表格等）
-    if (line.startsWith('<') && (line.startsWith('<h') || line.startsWith('<pre') || line.startsWith('<code') || line.startsWith('<table'))) {
-      if (inList) {
-        processedLines.push(`<ul>${listItems.map(item => `<li>${item}</li>`).join('')}</ul>`)
-        inList = false
-        listItems = []
-      }
-      processedLines.push(lines[i])
-      continue
-    }
-    
-    const listMatch = line.match(/^-\s+(.+)$/)
-    
-    if (listMatch) {
-      if (!inList) {
-        inList = true
-        listItems = []
-      }
-      listItems.push(listMatch[1])
-    } else {
-      if (inList) {
-        // 结束列表
-        processedLines.push(`<ul>${listItems.map(item => `<li>${item}</li>`).join('')}</ul>`)
-        inList = false
-        listItems = []
-      }
-      processedLines.push(lines[i])
-    }
+  try {
+    // 使用 marked 解析 Markdown
+    const html = marked.parse(text)
+    return html
+  } catch (error) {
+    console.error('Markdown 解析错误:', error)
+    // 降级处理：简单转义并换行
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\n/g, '<br>')
   }
-  
-  // 处理末尾的列表
-  if (inList && listItems.length > 0) {
-    processedLines.push(`<ul>${listItems.map(item => `<li>${item}</li>`).join('')}</ul>`)
-  }
-  
-  html = processedLines.join('\n')
-  
-  // 处理有序列表（数字. 开头）
-  const lines2 = html.split('\n')
-  const processedLines2 = []
-  let inOrderedList = false
-  let orderedListItems = []
-  
-  for (let i = 0; i < lines2.length; i++) {
-    const line = lines2[i].trim()
-    // 跳过已处理的HTML标签
-    if (line.startsWith('<') && (line.startsWith('<h') || line.startsWith('<pre') || line.startsWith('<code') || line.startsWith('<ul') || line.startsWith('<table'))) {
-      if (inOrderedList) {
-        processedLines2.push(`<ol>${orderedListItems.map(item => `<li>${item}</li>`).join('')}</ol>`)
-        inOrderedList = false
-        orderedListItems = []
-      }
-      processedLines2.push(lines2[i])
-      continue
-    }
-    
-    const orderedMatch = line.match(/^\d+\.\s+(.+)$/)
-    
-    if (orderedMatch) {
-      if (!inOrderedList) {
-        inOrderedList = true
-        orderedListItems = []
-      }
-      orderedListItems.push(orderedMatch[1])
-    } else {
-      if (inOrderedList) {
-        // 结束列表
-        processedLines2.push(`<ol>${orderedListItems.map(item => `<li>${item}</li>`).join('')}</ol>`)
-        inOrderedList = false
-        orderedListItems = []
-      }
-      processedLines2.push(lines2[i])
-    }
-  }
-  
-  // 处理末尾的有序列表
-  if (inOrderedList && orderedListItems.length > 0) {
-    processedLines2.push(`<ol>${orderedListItems.map(item => `<li>${item}</li>`).join('')}</ol>`)
-  }
-  
-  html = processedLines2.join('\n')
-  
-  // 粗体
-  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-  
-  // 行内代码
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
-  
-  // 换行（但保留在代码块、列表和表格中的换行）
-  // 先标记已处理的块
-  const blocks = []
-  html = html.replace(/(<pre>[\s\S]*?<\/pre>|<ul>[\s\S]*?<\/ul>|<ol>[\s\S]*?<\/ol>|<h[1-4]>.*?<\/h[1-4]>|<table[\s\S]*?<\/table>)/g, (match) => {
-    const id = `___BLOCK_${blocks.length}___`
-    blocks.push(match)
-    return id
-  })
-  // 处理剩余换行
-  html = html.replace(/\n/g, '<br>')
-  // 恢复块
-  blocks.forEach((block, index) => {
-    html = html.replace(`___BLOCK_${index}___`, block)
-  })
-  
-  return html
 }
 
-// 简单的 Markdown 格式化（基础版本，保留用于流式输出）
+// 简单的 Markdown 格式化（用于流式输出等场景）
 const formatMarkdown = (text) => {
   if (!text) return ''
   
-  // 转义 HTML
-  let html = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-  
-  // 粗体
-  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-  
-  // 代码块
-  html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
-  
-  // 行内代码
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
-  
-  // 换行
-  html = html.replace(/\n/g, '<br>')
-  
-  return html
+  try {
+    return marked.parse(text)
+  } catch (error) {
+    console.error('Markdown 解析错误:', error)
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\n/g, '<br>')
+  }
 }
 </script>
 
@@ -693,6 +551,9 @@ const formatMarkdown = (text) => {
 
 .message-text :deep(li) {
   margin: 4px 0;
+}
+
+.message-text :deep(ul li) {
   list-style-type: disc;
 }
 
@@ -700,27 +561,106 @@ const formatMarkdown = (text) => {
   list-style-type: decimal;
 }
 
-.message-text :deep(table.markdown-table) {
+/* 嵌套列表样式 */
+.message-text :deep(ul ul),
+.message-text :deep(ol ul) {
+  list-style-type: circle;
+}
+
+.message-text :deep(ul ul ul),
+.message-text :deep(ol ul ul) {
+  list-style-type: square;
+}
+
+/* 表格样式 - 支持 marked 生成的标准表格 */
+.message-text :deep(table) {
   border-collapse: collapse;
   width: 100%;
   margin: 12px 0;
   font-size: 14px;
 }
 
-.message-text :deep(table.markdown-table th),
-.message-text :deep(table.markdown-table td) {
+.message-text :deep(table th),
+.message-text :deep(table td) {
   border: 1px solid #e4e7ed;
   padding: 8px 12px;
   text-align: left;
 }
 
-.message-text :deep(table.markdown-table th) {
+.message-text :deep(table th) {
   background-color: #f5f7fa;
   font-weight: 600;
 }
 
-.message-text :deep(table.markdown-table tr:nth-child(even)) {
+.message-text :deep(table tr:nth-child(even)) {
   background-color: #fafafa;
+}
+
+/* 代码块样式 */
+.message-text :deep(pre) {
+  background-color: #f6f8fa;
+  border-radius: 6px;
+  padding: 12px;
+  overflow-x: auto;
+  margin: 12px 0;
+}
+
+.message-text :deep(pre code) {
+  background-color: transparent;
+  padding: 0;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* 行内代码样式 */
+.message-text :deep(code) {
+  background-color: rgba(175, 184, 193, 0.2);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 0.9em;
+}
+
+/* 引用块样式 */
+.message-text :deep(blockquote) {
+  border-left: 4px solid #dfe2e5;
+  margin: 12px 0;
+  padding: 8px 16px;
+  color: #6a737d;
+  background-color: #f6f8fa;
+}
+
+/* 链接样式 */
+.message-text :deep(a) {
+  color: #409eff;
+  text-decoration: none;
+}
+
+.message-text :deep(a:hover) {
+  text-decoration: underline;
+}
+
+/* 水平线样式 */
+.message-text :deep(hr) {
+  border: none;
+  border-top: 1px solid #e4e7ed;
+  margin: 16px 0;
+}
+
+/* 段落样式 */
+.message-text :deep(p) {
+  margin: 8px 0;
+  line-height: 1.6;
+}
+
+/* 强调样式 */
+.message-text :deep(strong) {
+  font-weight: 600;
+}
+
+.message-text :deep(em) {
+  font-style: italic;
 }
 </style>
 

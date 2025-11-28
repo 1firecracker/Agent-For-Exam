@@ -11,6 +11,10 @@ router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 class ConversationCreateRequest(BaseModel):
     title: Optional[str] = None
 
+class ConversationUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    pinned: Optional[bool] = None
+
 class ConversationResponse(BaseModel):
     conversation_id: str
     title: str
@@ -18,6 +22,7 @@ class ConversationResponse(BaseModel):
     updated_at: str
     file_count: int
     status: str
+    pinned: bool = False
 
     class Config:
         from_attributes = True
@@ -94,6 +99,44 @@ async def get_conversation(conversation_id: str):
         )
     
     return ConversationResponse(**conversation)
+
+
+@router.patch("/{conversation_id}", response_model=ConversationResponse)
+async def update_conversation(conversation_id: str, request: ConversationUpdateRequest):
+    """更新对话信息（重命名、置顶等）
+    
+    Args:
+        conversation_id: 对话ID
+        request: 更新请求（title、pinned）
+    """
+    service = ConversationService()
+    
+    conversation = service.get_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"对话 {conversation_id} 不存在"
+        )
+    
+    try:
+        updated = service.update_conversation(
+            conversation_id,
+            title=request.title,
+            pinned=request.pinned
+        )
+        if not updated:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="更新对话失败"
+            )
+        
+        conversation = service.get_conversation(conversation_id)
+        return ConversationResponse(**conversation)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"更新对话失败: {str(e)}"
+        )
 
 
 @router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
