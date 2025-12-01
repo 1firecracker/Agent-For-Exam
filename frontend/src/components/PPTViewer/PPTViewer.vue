@@ -24,6 +24,13 @@
           </div>
           <div class="header-right">
             <el-button
+              v-if="conversationStore.currentConversationId"
+              @click="showGraphDialog = true"
+              :icon="Connection"
+            >
+              查看知识图谱
+            </el-button>
+            <el-button
               v-if="selectedFileId"
               @click="handleRefresh"
               :loading="loading"
@@ -61,29 +68,38 @@
           />
           
           <SlideViewer
-            :slide="currentSlide"
+            :slides="slides"
             :current-slide-number="currentSlideNumber"
             :total-slides="slides.length"
-            :zoom-level="zoomLevel"
             :conversation-id="conversationStore.currentConversationId"
             :file-id="selectedFileId"
             :file-extension="currentFileExtension"
-            @previous="handlePrevious"
-            @next="handleNext"
-            @zoom-change="handleZoomChange"
+            @slide-change="handleSlideChange"
           />
         </div>
       </div>
     </el-card>
+    
+    <!-- 知识图谱弹窗 -->
+    <el-dialog
+      v-model="showGraphDialog"
+      title="知识图谱"
+      width="90%"
+      :close-on-click-modal="false"
+      class="graph-dialog"
+    >
+      <GraphViewer v-if="conversationStore.currentConversationId" />
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh, ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
+import { Refresh, ArrowLeft, ArrowRight, Connection } from '@element-plus/icons-vue'
 import { useDocumentStore } from '../../stores/documentStore'
 import { useConversationStore } from '../../stores/conversationStore'
+import GraphViewer from '../GraphViewer/GraphViewer.vue'
 import ThumbnailList from './ThumbnailList.vue'
 import SlideViewer from './SlideViewer.vue'
 
@@ -101,9 +117,9 @@ const conversationStore = useConversationStore()
 const loading = ref(false)
 const slides = ref([])
 const currentSlideNumber = ref(1)
-const zoomLevel = ref(1)
 const collapsed = ref(true)  // 默认侧边栏收缩
 const selectedFileId = ref(props.defaultFileId || null)
+const showGraphDialog = ref(false)  // 知识图谱弹窗显示状态
 
 // 监听 defaultFileId 变化
 watch(() => props.defaultFileId, (newFileId) => {
@@ -185,10 +201,6 @@ const handleNext = () => {
   if (currentSlideNumber.value < slides.value.length) {
     currentSlideNumber.value++
   }
-}
-
-const handleZoomChange = (zoom) => {
-  zoomLevel.value = zoom
 }
 
 const handleRefresh = () => {

@@ -12,11 +12,15 @@ from fastapi import UploadFile
 import app.config as config
 from app.services.conversation_service import ConversationService
 from app.services.lightrag_service import LightRAGService
+from app.services.mindmap_service import MindMapService
 from app.storage.file_manager import FileManager
 from app.utils.document_parser import DocumentParser
 
 # 全局信号量：限制同时处理的文档数量（避免 LightRAG 并发冲突）
 _processing_semaphore = asyncio.Semaphore(1)  # 同一时间只处理1个文档
+# 思维脑图生成信号量：确保同一对话的思维脑图串行生成（支持合并）
+_mindmap_semaphore: Dict[str, asyncio.Semaphore] = {}  # conversation_id -> Semaphore
+_mindmap_lock = asyncio.Lock()  # 保护 _mindmap_semaphore 字典的锁
 # 处理队列锁：确保队列操作的原子性
 _queue_lock = asyncio.Lock()
 # 等待队列：{ conversation_id: [document_id, ...] }
@@ -29,6 +33,7 @@ class DocumentService:
     def __init__(self):
         self.conversation_service = ConversationService()
         self.lightrag_service = LightRAGService()
+        self.mindmap_service = MindMapService()
         self.file_manager = FileManager()
         self.document_parser = DocumentParser()
         self.status_dir = Path(config.settings.conversations_metadata_dir) / "document_status"
@@ -311,14 +316,16 @@ class DocumentService:
                 # 清理 base64 字符串并保存
                 cleaned_text, base64_map = self._clean_base64_and_save(text, conversation_id)
                 
-                # 插入到 LightRAG（使用清理后的文本）
+                # 不再自动生成思维脑图，改为通过 Agent 模式按需生成
+                # 1. 直接插入到 LightRAG（生成知识图谱，使用清理后的文本）
+                print(f"📊 开始生成知识图谱: {document_id[:8]}...")
                 track_id = await self.lightrag_service.insert_document(
                     conversation_id=conversation_id,
                     text=cleaned_text,
                     doc_id=document_id
                 )
                 
-                # 更新状态为完成
+                # 更新状态为完成（知识图谱是异步处理的，不需要等待）
                 status = self._load_status(conversation_id)
                 if document_id in status.get("documents", {}):
                     status["documents"][document_id]["status"] = "completed"
@@ -344,6 +351,54 @@ class DocumentService:
                             _processing_queue[conversation_id].remove(document_id)
                         if not _processing_queue[conversation_id]:
                             del _processing_queue[conversation_id]
+    
+    async def _generate_mindmap_async(
+        self, 
+        conversation_id: str, 
+        document_id: str, 
+        document_text: str
+    ):
+        """异步生成思维脑图（串行处理，支持合并）
+        
+        Args:
+            conversation_id: 对话ID
+            document_id: 文档ID
+            document_text: 文档文本内容
+        """
+        global _mindmap_semaphore, _mindmap_lock
+        
+        # 获取对话标题（课程名）
+        conversation = self.conversation_service.get_conversation(conversation_id)
+        conversation_title = conversation.get("title", "未命名课程") if conversation else "未命名课程"
+        
+        # 获取文档文件名
+        document_info = self.get_document(conversation_id, document_id)
+        document_filename = document_info.get("filename", f"文档_{document_id[:8]}") if document_info else f"文档_{document_id[:8]}"
+        
+        # 获取或创建该对话的思维脑图信号量（确保串行）
+        async with _mindmap_lock:
+            if conversation_id not in _mindmap_semaphore:
+                _mindmap_semaphore[conversation_id] = asyncio.Semaphore(1)
+            semaphore = _mindmap_semaphore[conversation_id]
+        
+        # 使用信号量确保同一对话的思维脑图串行生成
+        async with semaphore:
+            print(f"🧠 开始生成思维脑图: {document_id[:8]}...")
+            try:
+                # 流式生成思维脑图（自动合并到已有脑图）
+                async for chunk in self.mindmap_service.generate_mindmap_stream(
+                    conversation_id,
+                    document_text,
+                    conversation_title,
+                    document_filename,
+                    document_id
+                ):
+                    # 流式输出可以在这里处理（如果需要实时推送）
+                    pass
+                print(f"✅ 思维脑图生成完成: {document_id[:8]}...")
+            except Exception as e:
+                print(f"❌ 思维脑图生成失败: {document_id[:8]}... 错误: {e}")
+                # 不抛出异常，避免影响文档处理流程
     
     def get_document(self, conversation_id: str, file_id: str) -> Optional[Dict]:
         """获取文档信息

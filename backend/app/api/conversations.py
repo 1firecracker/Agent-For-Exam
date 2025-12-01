@@ -1,7 +1,7 @@
 """对话管理 API"""
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.conversation_service import ConversationService
 
@@ -171,11 +171,15 @@ async def delete_conversation(conversation_id: str):
 class MessageRequest(BaseModel):
     query: str
     answer: str
+    tool_calls: Optional[List[dict]] = None  # 工具调用信息（可选）
+    stream_items: Optional[List[dict]] = None  # 流式输出项（工具调用和文本的混合顺序，可选）
 
 class MessageResponse(BaseModel):
     role: str
     content: str
     timestamp: str
+    streamItems: Optional[List[dict]] = None  # 流式输出项（工具调用和文本的混合顺序，可选）
+    toolCalls: Optional[List[dict]] = None  # 工具调用信息（向后兼容，可选）
 
 class MessagesResponse(BaseModel):
     messages: List[MessageResponse]
@@ -198,9 +202,43 @@ async def get_messages(conversation_id: str):
         )
     
     messages = service.get_messages(conversation_id)
+    # print(f"📥 [API] 获取到 {len(messages)} 条消息")  # 调试日志已关闭
+    
+    # 转换字段名：将 stream_items 转换为 streamItems，tool_calls 转换为 toolCalls（前端期望的格式）
+    converted_messages = []
+    for i, msg in enumerate(messages):
+        converted_msg = msg.copy()
+        msg_role = converted_msg.get('role', 'unknown')
+        # print(f"📝 [API] 处理消息 {i+1}/{len(messages)}: role={msg_role}, content长度={len(str(converted_msg.get('content', '')))}")  # 调试日志已关闭
+        
+        # 如果存在 stream_items，添加 streamItems 别名（前端期望的字段名），并删除原始字段
+        if 'stream_items' in converted_msg:
+            converted_msg['streamItems'] = converted_msg['stream_items']
+            del converted_msg['stream_items']
+        # 如果存在 tool_calls，添加 toolCalls 别名（向后兼容），并删除原始字段
+        if 'tool_calls' in converted_msg:
+            converted_msg['toolCalls'] = converted_msg['tool_calls']
+            del converted_msg['tool_calls']
+        # 确保所有消息都包含 streamItems 和 toolCalls 字段（即使为 None），以便 Pydantic 正确序列化
+        if 'streamItems' not in converted_msg:
+            converted_msg['streamItems'] = None
+        if 'toolCalls' not in converted_msg:
+            converted_msg['toolCalls'] = None
+        
+        # 验证必需字段
+        if 'role' not in converted_msg:
+            print(f"⚠️ [API] 警告: 消息 {i+1} 缺少 role 字段")
+        if 'content' not in converted_msg:
+            print(f"⚠️ [API] 警告: 消息 {i+1} 缺少 content 字段")
+        if 'timestamp' not in converted_msg:
+            print(f"⚠️ [API] 警告: 消息 {i+1} 缺少 timestamp 字段")
+        
+        converted_messages.append(converted_msg)
+    
+    # print(f"✅ [API] 转换完成，共 {len(converted_messages)} 条消息")  # 调试日志已关闭
     
     return MessagesResponse(
-        messages=[MessageResponse(**msg) for msg in messages]
+        messages=[MessageResponse(**msg) for msg in converted_messages]
     )
 
 
@@ -221,7 +259,13 @@ async def save_message(conversation_id: str, request: MessageRequest):
             detail=f"对话 {conversation_id} 不存在"
         )
     
-    success = service.add_message(conversation_id, request.query, request.answer)
+    success = service.add_message(
+        conversation_id, 
+        request.query, 
+        request.answer,
+        tool_calls=request.tool_calls,
+        stream_items=request.stream_items
+    )
     
     if not success:
         raise HTTPException(

@@ -84,6 +84,18 @@ export const useGraphStore = defineStore('graph', () => {
   }
 
   /**
+   * 检查知识图谱生成状态
+   */
+  async function getGraphStatus(conversationId) {
+    try {
+      return await graphService.getGraphStatus(conversationId)
+    } catch (err) {
+      error.value = err
+      throw err
+    }
+  }
+
+  /**
    * 清空图谱数据
    */
   function clearGraph() {
@@ -121,6 +133,7 @@ export const useGraphStore = defineStore('graph', () => {
     getEntity,
     getRelation,
     query,
+    getGraphStatus,
     clearGraph,
     reset
   }

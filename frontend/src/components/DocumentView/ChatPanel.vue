@@ -26,7 +26,44 @@
                 </el-collapse-item>
               </el-collapse>
             </div>
-            <div class="message-text" v-html="formatMessageWithWarning(message.content)"></div>
+            
+            <!-- 如果有 streamItems，按顺序显示工具调用和文本 -->
+            <template v-if="message.streamItems && message.streamItems.length > 0">
+              <template v-for="(item, itemIndex) in message.streamItems" :key="itemIndex">
+                <!-- 工具调用（紧凑形式）- 只显示有效的工具调用（toolName 存在且不为空） -->
+                <div v-if="item.type === 'tool_call' && item.toolName && item.toolName.trim()" class="tool-calls-section">
+                  <ToolCallInline
+                    :tool-name="item.toolName"
+                    :tool-arguments="item.arguments"
+                    :result="item.result"
+                    :error-message="item.errorMessage"
+                    :status="item.status"
+                  />
+                </div>
+                <!-- 文本内容 -->
+                <div v-else-if="item.type === 'text'" class="message-text">
+                  <span v-html="formatMessageWithWarning(item.content)"></span>
+                </div>
+              </template>
+            </template>
+            <!-- 如果没有 streamItems，使用旧的显示方式（向后兼容） -->
+            <template v-else>
+              <!-- 工具调用（紧凑形式）- 只显示有效的工具调用（toolName 存在且不为空） -->
+              <div v-if="message.toolCalls && message.toolCalls.length > 0 && message.toolCalls.some(tc => tc.toolName && tc.toolName.trim())" class="tool-calls-section">
+                <ToolCallInline
+                  v-for="(toolCall, toolIndex) in message.toolCalls.filter(tc => tc.toolName && tc.toolName.trim())"
+                  :key="toolIndex"
+                  :tool-name="toolCall.toolName"
+                  :tool-arguments="toolCall.arguments"
+                  :result="toolCall.result"
+                  :error-message="toolCall.errorMessage"
+                  :status="toolCall.status"
+                />
+              </div>
+              
+              <div class="message-text" v-html="formatMessageWithWarning(message.content)"></div>
+            </template>
+            
             <div class="message-time">{{ formatTime(message.timestamp) }}</div>
           </div>
         </div>
@@ -43,10 +80,53 @@
               </el-collapse-item>
             </el-collapse>
           </div>
-          <div class="message-text">
+          
+          <!-- 按顺序显示工具调用和文本 -->
+          <template v-for="(item, itemIndex) in streamItems" :key="itemIndex">
+            <!-- 工具调用（紧凑形式）- 只显示有效的工具调用（toolName 存在且不为空） -->
+            <div v-if="item.type === 'tool_call' && item.toolName && item.toolName.trim()" class="tool-calls-section">
+              <ToolCallInline
+                :tool-name="item.toolName"
+                :tool-arguments="item.arguments"
+                :result="item.result"
+                :error-message="item.errorMessage"
+                :status="item.status"
+              />
+            </div>
+            <!-- 文本内容 -->
+            <div v-else-if="item.type === 'text'" class="message-text">
+              <span v-html="formatMessageWithWarning(item.content)"></span>
+            </div>
+          </template>
+          
+           <!-- 向后兼容：如果 streamItems 为空，显示旧的工具调用和文本 -->
+           <template v-if="streamItems.length === 0">
+             <!-- 流式工具调用（紧凑形式）- 只显示有效的工具调用（toolName 存在且不为空） -->
+             <div v-if="currentStreamToolCalls.length > 0 && currentStreamToolCalls.some(tc => tc.toolName && tc.toolName.trim())" class="tool-calls-section">
+               <ToolCallInline
+                 v-for="(toolCall, toolIndex) in currentStreamToolCalls.filter(tc => tc.toolName && tc.toolName.trim())"
+                 :key="toolIndex"
+                 :tool-name="toolCall.toolName"
+                 :tool-arguments="toolCall.arguments"
+                 :result="toolCall.result"
+                 :error-message="toolCall.errorMessage"
+                 :status="toolCall.status"
+               />
+             </div>
+            
+            <!-- 文本内容 -->
+            <div v-if="currentStreamContent" class="message-text">
             <span v-if="currentStreamWarning" class="warning-text" v-html="formatMarkdown(currentStreamWarning)"></span>
             <span v-if="currentStreamWarning && currentStreamContent" v-html="formatMarkdown('\n\n')"></span>
             <span v-html="formatMessageWithWarning(currentStreamContent)"></span>
+              <span class="streaming-cursor">|</span>
+            </div>
+          </template>
+          
+          <!-- 如果使用新的混合显示，显示光标在最后 -->
+          <div v-if="streamItems.length > 0" class="message-text">
+            <span v-if="currentStreamWarning" class="warning-text" v-html="formatMarkdown(currentStreamWarning)"></span>
+            <span v-if="currentStreamWarning" v-html="formatMarkdown('\n\n')"></span>
             <span class="streaming-cursor">|</span>
           </div>
         </div>
@@ -61,12 +141,47 @@
           size="small"
           style="width: 120px;"
           placeholder="查询模式"
+          :disabled="!graphReady || agentModeEnabled"
         >
           <el-option label="简单模式" value="naive" />
-          <el-option label="混合模式" value="mix" />
-          <el-option label="本地模式" value="local" />
-          <el-option label="全局模式" value="global" /> 
+          <el-option 
+            label="混合模式" 
+            value="mix" 
+            :disabled="!graphReady"
+          />
+          <el-option 
+            label="本地模式" 
+            value="local" 
+            :disabled="!graphReady"
+          />
+          <el-option 
+            label="全局模式" 
+            value="global"
+            :disabled="!graphReady"
+          /> 
         </el-select>
+        <el-switch
+          v-model="agentModeEnabled"
+          active-text="Agent"
+          inactive-text="普通"
+          size="small"
+          style="margin-left: 8px;"
+          @change="handleAgentModeChange"
+        />
+        <el-tooltip 
+          v-if="!graphReady && !agentModeEnabled" 
+          content="知识图谱尚未完全生成，仅可使用简单模式"
+          placement="top"
+        >
+          <el-icon class="warning-icon"><Warning /></el-icon>
+        </el-tooltip>
+        <el-tooltip 
+          v-if="agentModeEnabled" 
+          content="Agent模式：智能助手可以调用工具完成任务（如生成思维导图）"
+          placement="top"
+        >
+          <el-icon class="info-icon"><InfoFilled /></el-icon>
+        </el-tooltip>
       </div>
       
       <div class="input-area">
@@ -96,12 +211,15 @@
 
 <script setup>
 import { ref, computed, watch, nextTick } from 'vue'
-import { Promotion } from '@element-plus/icons-vue'
+import { Promotion, Warning, InfoFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { marked } from 'marked'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useGraphStore } from '../../stores/graphStore'
+import ToolCallCard from './ToolCallCard.vue'
+import ToolCallInline from './ToolCallInline.vue'
+import { useDocumentStore } from '../../stores/documentStore'
 
 // 配置 marked 选项
 marked.setOptions({
@@ -112,6 +230,7 @@ marked.setOptions({
 const convStore = useConversationStore()
 const chatStore = useChatStore()
 const graphStore = useGraphStore()
+const docStore = useDocumentStore()
 
 const messagesContainer = ref(null)
 const inputText = ref('')
@@ -119,19 +238,97 @@ const selectedMode = ref('naive')
 const isStreaming = ref(false)
 const currentStreamContent = ref('')
 const currentStreamWarning = ref('')
+const currentStreamToolCalls = ref([]) // 流式输出中的工具调用列表（保留用于向后兼容）
+const streamItems = ref([]) // 按顺序存储工具调用和文本片段 {type: 'tool_call'|'text', data: ...}
 const thinkCollapseStates = ref([]) // 存储展开的消息索引数组（el-collapse需要数组）
 const streamingThinkCollapse = ref([]) // 流式输出时的think折叠状态（默认折叠，空数组）
+const graphReady = ref(false) // 知识图谱是否完全生成
+const graphStatusLoading = ref(false) // 检查知识图谱状态的加载状态
+const agentModeEnabled = ref(false) // Agent 模式开关
+
+// 检查消息是否有有效内容
+const hasValidContent = (message) => {
+  // 用户消息必须有 content
+  if (message.role === 'user') {
+    return message.content && message.content.trim()
+  }
+  
+  // assistant 消息检查
+  if (message.role === 'assistant') {
+    // 检查 streamItems 中是否有有效内容
+    if (message.streamItems && Array.isArray(message.streamItems) && message.streamItems.length > 0) {
+      const hasValidItem = message.streamItems.some(item => {
+        if (item.type === 'tool_call') {
+          // 有效的工具调用必须有 toolName
+          return item.toolName && item.toolName.trim()
+        } else if (item.type === 'text') {
+          // 有效的文本必须有内容
+          return item.content && item.content.trim()
+        }
+        return false
+      })
+      if (hasValidItem) return true
+    }
+    
+    // 检查 toolCalls 中是否有有效内容
+    if (message.toolCalls && Array.isArray(message.toolCalls) && message.toolCalls.length > 0) {
+      const hasValidToolCall = message.toolCalls.some(tc => tc.toolName && tc.toolName.trim())
+      if (hasValidToolCall) return true
+    }
+    
+    // 检查 content 是否有内容（排除 think 标签）
+    if (message.content) {
+      const contentWithoutThink = message.content.replace(/<(?:think|redacted_reasoning)>[\s\S]*?<\/(?:think|redacted_reasoning)>/gi, '').trim()
+      if (contentWithoutThink) return true
+    }
+    
+    return false
+  }
+  
+  return true
+}
 
 // 消息列表（从 chatStore 获取）
 const messages = computed(() => {
   if (!convStore.currentConversationId) return []
-  return chatStore.getMessages(convStore.currentConversationId)
+  const allMessages = chatStore.getMessages(convStore.currentConversationId)
+  // 过滤掉 tool 消息和没有有效内容的 assistant 消息
+  const filteredMessages = allMessages.filter(msg => {
+    if (msg.role === 'tool') return false
+    return hasValidContent(msg)
+  })
+  console.log(`🔄 [前端] 消息列表计算: 原始消息数=${allMessages.length}, 过滤后消息数=${filteredMessages.length}`)
+  return filteredMessages
 })
 
 // 计算属性：流式输出时是否有think内容（确保响应式更新）
 const hasStreamingThinkContent = computed(() => {
   return hasThinkContent(currentStreamContent.value)
 })
+
+// 检查知识图谱状态
+const checkGraphStatus = async (conversationId) => {
+  if (!conversationId) {
+    graphReady.value = false
+    return
+  }
+  
+  graphStatusLoading.value = true
+  try {
+    const status = await graphStore.getGraphStatus(conversationId)
+    graphReady.value = status.is_ready
+    
+    // 如果知识图谱未就绪，强制使用简单模式
+    if (!status.is_ready && selectedMode.value !== 'naive') {
+      selectedMode.value = 'naive'
+    }
+  } catch (error) {
+    console.error('检查知识图谱状态失败:', error)
+    graphReady.value = false
+  } finally {
+    graphStatusLoading.value = false
+  }
+}
 
 // 监听对话变化，加载历史消息和图谱
 watch(() => convStore.currentConversationId, async (newId) => {
@@ -143,11 +340,24 @@ watch(() => convStore.currentConversationId, async (newId) => {
     } catch (error) {
       console.error('加载图谱失败:', error)
     }
+    // 检查知识图谱状态
+    await checkGraphStatus(newId)
   } else {
     chatStore.clearMessages()
     graphStore.clearGraph()
+    graphReady.value = false
   }
 }, { immediate: true })
+
+// 监听文档处理状态变化，定期检查知识图谱状态
+watch(() => docStore.extractionProgress, async () => {
+  if (convStore.currentConversationId) {
+    // 延迟一下再检查，避免频繁请求
+    setTimeout(() => {
+      checkGraphStatus(convStore.currentConversationId)
+    }, 2000)
+  }
+}, { deep: true })
 
 // 监听消息变化，滚动到底部
 watch(() => messages.value.length, () => {
@@ -183,15 +393,178 @@ const handleSend = async () => {
   isStreaming.value = true
   currentStreamContent.value = ''
   currentStreamWarning.value = ''
+  currentStreamToolCalls.value = [] // 重置工具调用列表
+  streamItems.value = [] // 重置混合内容数组
   streamingThinkCollapse.value = [] // 重置流式think折叠状态（默认折叠）
   
   try {
-    await chatStore.queryStream(convStore.currentConversationId, query, selectedMode.value, (chunk) => {
-      // 检查是否是警告消息
-      if (typeof chunk === 'object' && chunk.type === 'warning') {
+    // 如果 Agent 模式开启，使用 agent 模式
+    const mode = agentModeEnabled.value ? "agent" : selectedMode.value
+    
+    await chatStore.queryStream(convStore.currentConversationId, query, mode, null, (chunk) => {
+      // 处理 Agent 模式的特殊响应
+      if (typeof chunk === 'object') {
+        if (chunk.type === 'tool_call') {
+          // 工具调用开始：添加到混合数组
+          // 在添加 tool_call 之前，确保将 currentStreamContent 中的文本内容先添加到 streamItems
+          if (currentStreamContent.value && currentStreamContent.value.trim()) {
+            const lastItem = streamItems.value[streamItems.value.length - 1]
+            if (lastItem && lastItem.type === 'text') {
+              // 如果最后一个项是文本，追加内容
+              lastItem.content += currentStreamContent.value
+            } else {
+              // 否则创建新的文本项
+              streamItems.value.push({
+                type: 'text',
+                content: currentStreamContent.value
+              })
+            }
+            // 清空 currentStreamContent，因为已经添加到 streamItems 了
+            currentStreamContent.value = ''
+          }
+          
+          const toolCall = chunk.tool_call
+          console.log('收到 tool_call:', toolCall)
+          
+          let argumentsObj = {}
+          try {
+            // 尝试解析 arguments（可能是字符串格式的 JSON）
+            const argsStr = toolCall.function?.arguments || '{}'
+            argumentsObj = typeof argsStr === 'string' ? JSON.parse(argsStr) : argsStr
+          } catch (e) {
+            console.warn('解析工具调用参数失败:', e)
+            argumentsObj = {}
+          }
+          
+          const toolCallItem = {
+            type: 'tool_call',
+            toolName: toolCall.function?.name || '',
+            arguments: argumentsObj,
+            result: null,
+            errorMessage: null,
+            timestamp: Date.now(),
+            status: 'pending'
+          }
+          
+          console.log('添加 tool_call 到 streamItems:', toolCallItem)
+          streamItems.value.push(toolCallItem)
+          // 同时添加到 currentStreamToolCalls（用于向后兼容）
+          currentStreamToolCalls.value.push({
+            toolName: toolCallItem.toolName,
+            arguments: toolCallItem.arguments,
+            result: null,
+            errorMessage: null,
+            timestamp: toolCallItem.timestamp,
+            status: 'pending'
+          })
+          console.log('当前 streamItems:', streamItems.value)
+        } else if (chunk.type === 'tool_result') {
+          // 工具执行结果
+          const toolResult = chunk.tool_result
+          const result = toolResult.result || {}
+          
+          // 更新 streamItems 中对应的工具调用（从后往前找，找到最后一个未完成的）
+          let toolCallIndex = -1
+          for (let i = streamItems.value.length - 1; i >= 0; i--) {
+            if (streamItems.value[i].type === 'tool_call' && 
+                streamItems.value[i].toolName === toolResult.tool_name && 
+                !streamItems.value[i].result) {
+              toolCallIndex = i
+              break
+            }
+          }
+          
+          if (toolCallIndex !== -1) {
+            // 更新 streamItems 中的工具调用
+            streamItems.value[toolCallIndex].arguments = toolResult.arguments || {}
+            streamItems.value[toolCallIndex].result = result
+            streamItems.value[toolCallIndex].status = result.status === 'success' ? 'success' : (result.status === 'error' ? 'error' : 'pending')
+          }
+          
+          // 查找或创建工具调用记录（用于向后兼容）
+          let toolCallIndex2 = currentStreamToolCalls.value.findIndex(
+            tc => tc.toolName === toolResult.tool_name && !tc.result
+          )
+          
+          if (toolCallIndex2 === -1) {
+            // 创建新的工具调用记录
+            currentStreamToolCalls.value.push({
+              toolName: toolResult.tool_name,
+              arguments: toolResult.arguments || {},
+              result: result,
+              errorMessage: null,
+              timestamp: Date.now(),
+              status: result.status === 'success' ? 'success' : (result.status === 'error' ? 'error' : 'pending')
+            })
+          } else {
+            // 更新现有记录
+            currentStreamToolCalls.value[toolCallIndex2].result = result
+            currentStreamToolCalls.value[toolCallIndex2].status = result.status === 'success' ? 'success' : (result.status === 'error' ? 'error' : 'pending')
+          }
+          
+          // 如果是思维脑图工具，更新思维脑图
+          if (toolResult.tool_name === 'generate_mindmap' && result.status === 'success') {
+            const mindmapContent = result.mindmap_content || result.result?.mindmap_content
+            if (mindmapContent) {
+              // 导入 mindmapStore 并更新
+              import('../../stores/mindmapStore').then(({ useMindMapStore }) => {
+                const mindmapStore = useMindMapStore()
+                mindmapStore.mindmapContent = mindmapContent
+              })
+            }
+          }
+        } else if (chunk.type === 'tool_error') {
+          // 工具执行错误
+          // 更新 streamItems 中对应的工具调用
+          let toolCallIndex = -1
+          for (let i = streamItems.value.length - 1; i >= 0; i--) {
+            if (streamItems.value[i].type === 'tool_call' && 
+                streamItems.value[i].toolName === chunk.tool_name && 
+                !streamItems.value[i].result) {
+              toolCallIndex = i
+              break
+            }
+          }
+          
+          if (toolCallIndex !== -1) {
+            streamItems.value[toolCallIndex].errorMessage = chunk.message
+            streamItems.value[toolCallIndex].status = 'error'
+          }
+          
+          // 向后兼容
+          currentStreamToolCalls.value.push({
+            toolName: chunk.tool_name,
+            arguments: {},
+            result: null,
+            errorMessage: chunk.message,
+            timestamp: Date.now(),
+            status: 'error'
+          })
+        } else if (chunk.type === 'mindmap_content') {
+          // 思维脑图内容（流式）
+          import('../../stores/mindmapStore').then(({ useMindMapStore }) => {
+            const mindmapStore = useMindMapStore()
+            mindmapStore.mindmapContent = chunk.content
+          })
+        } else if (chunk.type === 'warning') {
         currentStreamWarning.value = chunk.content
+        } else if (chunk.type === 'response') {
+          // Agent 模式的正常响应
+          console.log('📥 [前端] 收到 response 事件:', chunk.content)
+          // Agent 模式使用 streamItems 显示，不需要添加到 currentStreamContent（避免重复）
+          // 追加到最后一个文本项或创建新项
+          const lastItem = streamItems.value[streamItems.value.length - 1]
+          if (lastItem && lastItem.type === 'text') {
+            lastItem.content += chunk.content
+          } else {
+            streamItems.value.push({
+              type: 'text',
+              content: chunk.content
+            })
+          }
+        }
       } else if (typeof chunk === 'string') {
-        // 普通响应内容
+        // 普通响应内容（非 Agent 模式）
         currentStreamContent.value += chunk
       }
       nextTick(() => {
@@ -200,19 +573,62 @@ const handleSend = async () => {
     })
     
     // 流式结束，保存完整回复（包含警告提示）
+    // 在提取内容之前，确保 currentStreamContent 中剩余的内容也被添加到 streamItems
+    if (currentStreamContent.value && currentStreamContent.value.trim()) {
+      const lastItem = streamItems.value[streamItems.value.length - 1]
+      if (lastItem && lastItem.type === 'text') {
+        // 如果最后一个项是文本，追加内容
+        lastItem.content += currentStreamContent.value
+      } else {
+        // 否则创建新的文本项
+        streamItems.value.push({
+          type: 'text',
+          content: currentStreamContent.value
+        })
+      }
+      // 清空 currentStreamContent，因为已经添加到 streamItems 了
+      currentStreamContent.value = ''
+    }
+    
+    // 从 streamItems 中提取文本内容和工具调用
     let fullContent = ''
+    const toolCallsFromStream = []
+    
     if (currentStreamWarning.value) {
       fullContent = currentStreamWarning.value + '\n\n'
     }
-    if (currentStreamContent.value) {
+    
+    // 从 streamItems 中提取内容
+    for (const item of streamItems.value) {
+      if (item.type === 'text') {
+        fullContent += item.content
+      } else if (item.type === 'tool_call') {
+        toolCallsFromStream.push({
+          toolName: item.toolName,
+          arguments: item.arguments,
+          result: item.result,
+          errorMessage: item.errorMessage,
+          timestamp: item.timestamp,
+          status: item.status
+        })
+      }
+    }
+    
+    // 向后兼容：如果没有 streamItems，使用旧的方式
+    if (streamItems.value.length === 0 && currentStreamContent.value) {
       fullContent += currentStreamContent.value
     }
     
-    if (fullContent) {
+    const finalToolCalls = toolCallsFromStream.length > 0 ? toolCallsFromStream : 
+                           (currentStreamToolCalls.value.length > 0 ? currentStreamToolCalls.value : undefined)
+    
+    if (fullContent || finalToolCalls) {
       const newMessageIndex = messages.value.length
       chatStore.addMessage(convStore.currentConversationId, {
         role: 'assistant',
         content: fullContent,
+        toolCalls: finalToolCalls,
+        streamItems: streamItems.value.length > 0 ? [...streamItems.value] : undefined, // 保存 streamItems 以便后续显示
         timestamp: Date.now()
       })
       
@@ -227,12 +643,19 @@ const handleSend = async () => {
         })
       }
       
-      // 保存到后端
-      await chatStore.saveMessage(convStore.currentConversationId, query, fullContent)
+      // 保存到后端（包含工具调用信息和 streamItems）
+      await chatStore.saveMessage(
+        convStore.currentConversationId, 
+        query, 
+        fullContent,
+        finalToolCalls,
+        streamItems.value.length > 0 ? [...streamItems.value] : null
+      )
     }
     
     currentStreamContent.value = ''
     currentStreamWarning.value = ''
+    streamItems.value = [] // 重置混合内容数组
     streamingThinkCollapse.value = [] // 重置流式think折叠状态
   } catch (error) {
     console.error('查询失败:', error)
@@ -249,6 +672,15 @@ const handleSend = async () => {
     nextTick(() => {
       scrollToBottom()
     })
+  }
+}
+
+// Agent 模式切换
+const handleAgentModeChange = (enabled) => {
+  if (enabled) {
+    ElMessage.info('已启用 Agent 模式，可以智能调用工具完成任务')
+  } else {
+    ElMessage.info('已切换到普通模式')
   }
 }
 
@@ -339,9 +771,9 @@ const formatMarkdown = (text) => {
   } catch (error) {
     console.error('Markdown 解析错误:', error)
     return text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
       .replace(/\n/g, '<br>')
   }
 }
@@ -402,6 +834,10 @@ const formatMarkdown = (text) => {
 .assistant-message .message-content {
   background-color: #f0f2f5;
   color: #303133;
+}
+
+.tool-calls-section {
+  margin: 12px 0;
 }
 
 .message-text {

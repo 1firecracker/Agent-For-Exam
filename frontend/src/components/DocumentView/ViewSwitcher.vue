@@ -11,11 +11,11 @@
           PPT 视图
         </el-button>
         <el-button
-          :type="viewMode === 'graph' ? 'primary' : 'default'"
+          :type="viewMode === 'mindmap' ? 'primary' : 'default'"
           :icon="Connection"
-          @click="viewMode = 'graph'"
+          @click="viewMode = 'mindmap'"
         >
-          知识图谱
+          思维脑图
         </el-button>
         <el-button
           :type="viewMode === 'exercise' ? 'primary' : 'default'"
@@ -56,9 +56,12 @@
         />
       </div>
       
-      <!-- 知识图谱视图 -->
-      <div v-show="viewMode === 'graph'" class="graph-view">
-        <GraphViewer v-if="convStore.currentConversationId" />
+      <!-- 思维脑图视图 -->
+      <div v-if="viewMode === 'mindmap'" class="mindmap-view">
+        <MindMapViewer 
+          v-if="convStore.currentConversationId" 
+          :key="`mindmap-${convStore.currentConversationId}-${viewMode}`"
+        />
         <el-empty
           v-else
           description="请先选择或创建一个对话"
@@ -100,11 +103,11 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, nextTick } from 'vue'
 import { Document, Connection, EditPen, Finished } from '@element-plus/icons-vue'
 import { useConversationStore } from '../../stores/conversationStore'
 import PPTViewer from '../PPTViewer/PPTViewer.vue'
-import GraphViewer from '../GraphViewer/GraphViewer.vue'
+import MindMapViewer from '../MindMapViewer/MindMapViewer.vue'
 import ExerciseViewer from '../ExerciseViewer/ExerciseViewer.vue'
 import GradingViewer from '../GradingView/GradingView.vue'
 import RecordViewer from '../RecordView/RecordView.vue'
@@ -123,7 +126,18 @@ const viewMode = ref('ppt')
 
 // 通知父组件视图模式变化
 watch(viewMode, (newMode) => {
+  console.log('🔄 视图模式切换:', newMode)
   emit('view-mode-change', newMode)
+  
+  // 当切换到思维脑图视图时，确保组件加载
+  if (newMode === 'mindmap' && convStore.currentConversationId) {
+    console.log('🔄 切换到思维脑图视图，对话ID:', convStore.currentConversationId)
+    // 使用 nextTick 确保组件已经渲染
+    nextTick(() => {
+      // 组件会自动通过 onMounted 或 watch 加载，这里只是触发一下
+      console.log('✅ 思维脑图视图已切换')
+    })
+  }
 })
 </script>
 
@@ -150,7 +164,7 @@ watch(viewMode, (newMode) => {
 }
 
 .ppt-view,
-.graph-view,
+.mindmap-view,
 .exercise-view,
 .grading-view,
 .record-view {

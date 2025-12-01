@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from app.config import settings
-from app.api import conversations, documents, graph, images, exercises
+from app.api import conversations, documents, graph, images, exercises, mindmap_routes
 
 app = FastAPI(
     title="Agent for Exam",
@@ -34,6 +34,7 @@ app.include_router(documents.router)
 app.include_router(graph.router)
 app.include_router(images.router)
 app.include_router(exercises.router)
+app.include_router(mindmap_routes.router)
 
 @app.get("/")
 async def root():

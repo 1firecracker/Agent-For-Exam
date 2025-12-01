@@ -13,7 +13,7 @@ router = APIRouter(tags=["graph"])
 # 请求/响应模型
 class QueryRequest(BaseModel):
     query: str
-    mode: Optional[str] = "naive"  # naive/local/global/mix
+    mode: Optional[str] = "naive"  # naive/local/global/mix/agent
 
 class QueryResponse(BaseModel):
     conversation_id: str
@@ -48,6 +48,61 @@ class GraphResponse(BaseModel):
     relations: List[RelationResponse]
     total_entities: int
     total_relations: int
+
+class GraphStatusResponse(BaseModel):
+    """知识图谱状态响应"""
+    is_ready: bool  # 是否完全生成完成
+    total_documents: int  # 总文档数
+    completed_documents: int  # 已完成文档数
+    processing_documents: int  # 处理中文档数
+    pending_documents: int  # 等待处理文档数
+    failed_documents: int  # 失败文档数
+
+
+@router.get("/api/conversations/{conversation_id}/graph/status",
+            response_model=GraphStatusResponse)
+async def get_graph_status(conversation_id: str):
+    """检查知识图谱生成状态
+    
+    Args:
+        conversation_id: 对话ID
+        
+    Returns:
+        知识图谱状态信息
+    """
+    from app.services.document_service import DocumentService
+    
+    doc_service = DocumentService()
+    documents = doc_service.list_documents(conversation_id)
+    
+    total = len(documents)
+    completed = 0
+    processing = 0
+    pending = 0
+    failed = 0
+    
+    for doc in documents:
+        status = doc.get("status", "pending")
+        if status == "completed":
+            completed += 1
+        elif status == "processing":
+            processing += 1
+        elif status == "failed":
+            failed += 1
+        else:
+            pending += 1
+    
+    # 只有当所有文档都完成时，知识图谱才算完全生成
+    is_ready = total > 0 and completed == total
+    
+    return GraphStatusResponse(
+        is_ready=is_ready,
+        total_documents=total,
+        completed_documents=completed,
+        processing_documents=processing,
+        pending_documents=pending,
+        failed_documents=failed
+    )
 
 
 @router.get("/api/conversations/{conversation_id}/graph",
@@ -239,12 +294,53 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
           f"用户{token_stats['history_user_count']}条+助手{token_stats['history_assistant_count']}条), "
           f"总计={token_stats['total_input_tokens']}")
     
-    # 验证查询模式（排除 bypass 模式，因为 bypass 不检索）
+    # 检查是否是 Agent 模式
+    if request.mode == "agent":
+        # 使用 Agent 服务处理
+        from app.services.agent.agent_service import AgentService
+        
+        agent_service = AgentService()
+        
+        async def agent_stream():
+            try:
+                async for chunk in agent_service.process_user_query(
+                    conversation_id,
+                    request.query,
+                    conversation_history=history
+                ):
+                    # 格式化输出
+                    if chunk["type"] == "tool_call":
+                        # tool_call 事件：发送 tool_call 对象
+                        yield f"{json.dumps({'tool_call': chunk.get('tool_call')})}\n"
+                    elif chunk["type"] == "tool_result":
+                        yield f"{json.dumps({'tool_result': chunk})}\n"
+                    elif chunk["type"] == "tool_error":
+                        yield f"{json.dumps({'tool_error': chunk})}\n"
+                    elif chunk["type"] == "mindmap_content":
+                        yield f"{json.dumps({'mindmap_content': chunk['content']})}\n"
+                    elif chunk["type"] == "response":
+                        yield f"{json.dumps({'response': chunk['content']})}\n"
+                    elif chunk["type"] == "error":
+                        yield f"{json.dumps({'error': chunk['content']})}\n"
+            except Exception as e:
+                yield f"{json.dumps({'error': str(e)})}\n"
+        
+        return StreamingResponse(
+            agent_stream(),
+            media_type="application/x-ndjson",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
+    
+    # 验证查询模式（排除 bypass 模式和 agent 模式）
     valid_modes = ["naive", "local", "global", "mix"]
     if request.mode not in valid_modes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"无效的查询模式: {request.mode}，支持的模式: {', '.join(valid_modes)}"
+            detail=f"无效的查询模式: {request.mode}，支持的模式: {', '.join(valid_modes + ['agent'])}"
         )
     
     # 第一层：快速检查是否有文档（无需初始化 LightRAG）

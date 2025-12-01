@@ -55,6 +55,16 @@ class GraphService {
     })
     return response
   }
+
+  /**
+   * 检查知识图谱生成状态
+   * @param {string} conversationId - 对话ID
+   * @returns {Promise<Object>} 状态信息 { is_ready, total_documents, completed_documents, ... }
+   */
+  async getGraphStatus(conversationId) {
+    const response = await api.get(`/api/conversations/${conversationId}/graph/status`)
+    return response
+  }
 }
 
 export default new GraphService()

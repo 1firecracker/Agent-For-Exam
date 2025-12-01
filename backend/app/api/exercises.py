@@ -400,11 +400,12 @@ async def get_generated_questions(conversation_id: str):
         qb = load_question_bank(f"{conversation_id}_generated")
 
     if qb is None or not getattr(qb, "questions", None):
-        # 说明当前会话还没生成过题，返回 404，让前端显示“暂无试题”
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="当前会话尚未生成试题"
-        )
+        # 说明当前会话还没生成过题，返回空数组（不显示错误提示）
+        return {
+            "conversation_id": conversation_id,
+            "question_count": 0,
+            "questions": [],
+        }
 
     # 兼容 Question 既可能是 Pydantic，也可能是普通 dataclass 的情况
     def q_to_dict(q):

@@ -264,13 +264,28 @@ class ConversationService:
         conversation_dir = self.get_conversation_dir(conversation_id)
         return conversation_dir / "messages.json"
     
-    def add_message(self, conversation_id: str, query: str, answer: str) -> bool:
+    def add_message(self, conversation_id: str, query: str, answer: str, tool_calls: Optional[List[dict]] = None, stream_items: Optional[List[dict]] = None) -> bool:
         """添加消息到对话历史
         
         Args:
             conversation_id: 对话ID
             query: 用户查询
             answer: AI回复
+            tool_calls: 工具调用信息（可选），格式为：
+                [
+                    {
+                        "toolName": "tool_name",
+                        "arguments": {...},
+                        "result": {...},
+                        "status": "success" | "error",
+                        "errorMessage": "..." (可选)
+                    }
+                ]
+            stream_items: 流式输出项（可选），格式为：
+                [
+                    {"type": "tool_call", "toolName": "...", "arguments": {...}, "result": {...}, "status": "..."},
+                    {"type": "text", "content": "..."}
+                ]
             
         Returns:
             是否成功
@@ -287,20 +302,76 @@ class ConversationService:
             except:
                 messages = []
         
-        # 添加新消息
-        message = {
+        # 添加用户消息
+        user_message = {
             "role": "user",
             "content": query,
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }
-        messages.append(message)
+        messages.append(user_message)
         
-        message = {
+        # 如果有工具调用，先添加 assistant 消息（包含 tool_calls）
+        if tool_calls and len(tool_calls) > 0:
+            # 构建 tool_calls 格式（OpenAI Function Calling 格式）
+            assistant_tool_calls = []
+            for i, tool_call in enumerate(tool_calls):
+                tool_name = tool_call.get("toolName", "")
+                arguments = tool_call.get("arguments", {})
+                
+                assistant_tool_calls.append({
+                    "id": f"call_{i}_{int(datetime.utcnow().timestamp() * 1000)}",
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": json.dumps(arguments, ensure_ascii=False)
+                    }
+                })
+            
+            # 添加 assistant 消息（包含 tool_calls）
+            assistant_message = {
+                "role": "assistant",
+                "content": "",  # 工具调用时 content 为空字符串
+                "tool_calls": assistant_tool_calls,
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
+            messages.append(assistant_message)
+            
+            # 添加 tool 消息（工具执行结果）
+            for i, tool_call in enumerate(tool_calls):
+                tool_name = tool_call.get("toolName", "")
+                result = tool_call.get("result", {})
+                status = tool_call.get("status", "unknown")
+                error_message = tool_call.get("errorMessage")
+                
+                # 格式化工具结果内容
+                if status == "success":
+                    if isinstance(result, dict):
+                        result_content = result.get("message", "执行成功")
+                        if result.get("result"):
+                            result_content += f"\n\n查询结果：\n{result.get('result')}"
+                    else:
+                        result_content = str(result) if result else "执行成功"
+                else:
+                    result_content = error_message or "执行失败"
+                
+                tool_message = {
+                    "role": "tool",
+                    "content": result_content,
+                    "tool_call_id": assistant_tool_calls[i]["id"],
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+                messages.append(tool_message)
+        
+        # 添加最终的 assistant 回答消息
+        assistant_message = {
             "role": "assistant",
             "content": answer,
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }
-        messages.append(message)
+        # 如果有 stream_items，保存到消息中
+        if stream_items:
+            assistant_message["stream_items"] = stream_items
+        messages.append(assistant_message)
         
         # 保存消息
         with open(messages_file, 'w', encoding='utf-8') as f:
