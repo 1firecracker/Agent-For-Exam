@@ -238,7 +238,7 @@ const renderMindMap = async (container, content) => {
       },
       duration: 300,
       maxWidth: 300,
-      initialExpandLevel: 3, // 默认展开到第 2 层，更深层级默认折叠
+      initialExpandLevel: 4, // 默认展开到第 2 层，更深层级默认折叠
     }
     
     if (container === mindmapContainer.value) {

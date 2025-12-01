@@ -1,8 +1,18 @@
 # Agent for Exam
 
-基于 LightRAG 的智能考试助手系统，面向教育场景的知识图谱构建、智能问答、试题生成和自动批改的 Web 应用。支持 PPTX/PDF 文档上传、知识抽取、知识图谱可视化、智能对话、AI 生成试题和智能批改功能。
+基于 LightRAG 的智能考试助手系统，面向教育场景的知识图谱构建、智能问答、试题生成和自动批改的 Web 应用。支持 PPTX/PDF 文档上传、知识抽取、知识图谱可视化、智能对话、AI 生成试题和智能批改功能，并提供基于大模型的智能 Agent 模式，自动编排多种工具完成文档浏览、知识图谱问答和思维导图生成等任务。
 
 ![Agent for Exam 系统架构图](./exam%20agent.png)
+
+## Agent 模式简介
+
+本项目内置了基于大模型 Function Calling 的 **智能 Agent 模式**，可以根据用户的自然语言指令自动选择和调用工具，完成与考试场景相关的一系列任务，包括但不限于：
+
+- **文档智能浏览**：自动列出当前对话下的所有教学文档，帮助快速了解可用资料（`list_documents` 工具）。
+- **知识图谱问答**：基于 LightRAG 构建的知识图谱，对上传文档进行结构化理解，并支持多模式查询（`query_knowledge_graph` 工具）。
+- **思维导图生成**：根据用户指定的文档或问题，自动生成知识结构化的思维导图 / 脑图，支持在前端进行可视化查看（`generate_mindmap` 工具）。
+
+在 Agent 模式下，用户只需要用自然语言表达需求（例如“帮我根据本课 PPT 生成一张思维导图”），系统会自动决定是否调用工具以及调用顺序，并将工具结果整合成最终回答。
 
 ## 项目结构
 
@@ -11,15 +21,6 @@ NLP_project/
 ├── backend/                    # 后端服务（FastAPI）
 │   ├── app/                    # 应用核心代码
 │   │   ├── agents/            # Agent 链式处理模块
-│   │   │   ├── agent_a_data_preparation.py      # 数据准备
-│   │   │   ├── agent_b_knowledge_analysis.py    # 知识点分析
-│   │   │   ├── agent_c_type_analysis.py         # 题型分析
-│   │   │   ├── agent_d_sample_parser.py        # 样本解析
-│   │   │   ├── agent_e_question_generation.py   # 题目生成
-│   │   │   ├── agent_f_quality_control.py        # 质量控制
-│   │   │   ├── agent_g_grader.py                # 智能批改
-│   │   │   ├── agent_h_learning_advisor.py     # 学习建议
-│   │   │   └── quiz_graph.py                    # Agent 调度图
 │   │   ├── api/               # API 路由
 │   │   ├── services/          # 业务逻辑
 │   │   └── utils/             # 工具函数
@@ -353,6 +354,17 @@ npm run dev
 - 支持 OpenAI 兼容 API（如硅基流动、DeepSeek 等）
 - 支持 Ollama 本地模型
 - 可配置的 Embedding 模型
+
+## Agent 模式技术说明（简要）
+
+Agent 模式基于 **OpenAI 兼容的 tools / function calling 能力** 实现，通过结构化的工具定义，让后端业务函数可以被大模型“感知”和调用，整体流程如下：
+
+1. **工具注册**：在后端通过 `ToolRegistry` 注册多个工具（如 `generate_mindmap`、`query_knowledge_graph`、`list_documents`），并为每个工具定义名称、描述和参数 JSON Schema。
+2. **暴露给 LLM**：在调用 LLM 的请求中，通过 `tools` 字段将所有可用工具的信息传给模型，并使用 `tool_choice=auto` 让模型根据用户需求自动选择是否调用工具。
+3. **模型决定工具调用**：当模型认为需要调用工具时，会返回结构化的 `tool_calls` 字段（包含要调用的工具名和参数 JSON 字符串），而不是普通自然语言文本。
+4. **后端执行与二次调用**：后端解析 `tool_calls`，执行对应的 Python 处理函数，获得结果后以 `tool` 消息的形式回传给 LLM，随后再次调用 LLM 生成面向用户的自然语言最终回答。
+
+当前 Agent 模式主要围绕考试与教学场景，重点支持 **文档列表获取、知识图谱查询和思维导图生成** 三类工具，后续可以按相同方式扩展新的工具和能力。
 
 ## 常见问题
 
