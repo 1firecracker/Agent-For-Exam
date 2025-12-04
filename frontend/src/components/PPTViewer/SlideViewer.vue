@@ -8,6 +8,8 @@
         :ref="el => slideRefs[index] = el"
         class="slide-item"
         :class="{ 'current-slide': slideItem.slide_number === props.currentSlideNumber }"
+        @click.stop="handleSlideClick(slideItem.slide_number)"
+        @mousedown.stop
       >
         <div class="slide-content-wrapper">
           <!-- 渲染的图片（背景层） -->
@@ -232,6 +234,11 @@ const handleMouseDown = (event) => {
     return
   }
   
+  // 如果点击在 slide-item 上，不处理（由 handleSlideClick 处理）
+  if (event.target.closest('.slide-item')) {
+    return
+  }
+  
   // 左键：上一页
   if (event.button === 0 && props.currentSlideNumber > 1) {
     emit('slide-change', props.currentSlideNumber - 1)
@@ -240,6 +247,23 @@ const handleMouseDown = (event) => {
   else if (event.button === 2 && props.currentSlideNumber < props.totalSlides) {
     emit('slide-change', props.currentSlideNumber + 1)
   }
+}
+
+// 点击某一页，直接定位到该页
+const handleSlideClick = (slideNumber) => {
+  if (slideNumber === props.currentSlideNumber) return
+  // 触发与键盘/鼠标翻页一致的切换逻辑
+  emit('slide-change', slideNumber)
+  // 立即滚动到目标页（不依赖 watch，避免延迟）
+  nextTick(() => {
+    const index = slideNumber - 1
+    if (slideRefs.value && slideRefs.value[index]) {
+      slideRefs.value[index]?.scrollIntoView({ 
+        behavior: 'smooth', 
+        block: 'center' 
+      })
+    }
+  })
 }
 
 const formatPosition = (position) => {
@@ -260,19 +284,30 @@ const onImageError = (slideNumber) => {
 }
 
 // 监听当前幻灯片变化，滚动到对应位置
+// 注意：仅在非点击触发的场景下使用（如键盘翻页、缩略图点击等）
 watch(
   () => props.currentSlideNumber,
-  (newNumber) => {
-    if (slideRefs.value && slideRefs.value[newNumber - 1]) {
-      nextTick(() => {
-        slideRefs.value[newNumber - 1]?.scrollIntoView({ 
-          behavior: 'smooth', 
-          block: 'center' 
+  (newNumber, oldNumber) => {
+    // 只有当页码真正变化时才滚动
+    if (newNumber === oldNumber || newNumber <= 0) return
+    
+    // 延迟执行，确保 DOM 已更新
+    nextTick(() => {
+      const index = newNumber - 1
+      if (slideRefs.value && slideRefs.value[index] && slideRefs.value[index]) {
+        // 使用 requestAnimationFrame 确保滚动时元素已渲染
+        requestAnimationFrame(() => {
+          const targetElement = slideRefs.value[index]
+          if (targetElement) {
+            targetElement.scrollIntoView({ 
+              behavior: 'smooth', 
+              block: 'center' 
+            })
+          }
         })
-      })
-    }
-  },
-  { immediate: true }
+      }
+    })
+  }
 )
 
 // 组件挂载时加载实体数据
