@@ -549,6 +549,15 @@ const handleSend = async () => {
           })
         } else if (chunk.type === 'warning') {
         currentStreamWarning.value = chunk.content
+        } else if (chunk.type === 'error') {
+          // 错误信息：显示友好提示
+          ElMessage.error(chunk.content || '查询失败，请重试')
+          chatStore.addMessage(convStore.currentConversationId, {
+            role: 'assistant',
+            content: chunk.content || '抱歉，查询失败。请检查网络连接或稍后重试。',
+            timestamp: Date.now()
+          })
+          // 不抛出异常，让流式处理正常结束
         } else if (chunk.type === 'response') {
           // Agent 模式的正常响应
           console.log('📥 [前端] 收到 response 事件:', chunk.content)

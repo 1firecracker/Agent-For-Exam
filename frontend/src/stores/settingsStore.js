@@ -1,0 +1,76 @@
+/**
+ * 设置 Store - 管理 LLM 配置状态
+ */
+import { defineStore } from 'pinia'
+import { ref } from 'vue'
+import { settingsService } from '../services/settingsService'
+
+export const useSettingsStore = defineStore('settings', () => {
+  // 状态
+  const configs = ref({
+    knowledge_graph: {
+      binding: 'openai',
+      model: '',
+      host: ''
+    },
+    chat: {
+      binding: 'openai',
+      model: '',
+      host: ''
+    },
+    mindmap: {
+      binding: 'openai',
+      model: '',
+      host: ''
+    }
+  })
+  
+  const modelLists = ref({
+    siliconflow: []
+  })
+  
+  const loading = ref(false)
+
+  // Actions
+  async function loadConfig() {
+    loading.value = true
+    try {
+      const data = await settingsService.getLLMConfig()
+      configs.value = {
+        knowledge_graph: data.knowledge_graph,
+        chat: data.chat,
+        mindmap: data.mindmap
+      }
+      modelLists.value = data.model_lists || {}
+    } catch (error) {
+      console.error('加载配置失败:', error)
+      throw error
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function updateConfig(scene, config) {
+    loading.value = true
+    try {
+      const result = await settingsService.updateLLMConfig(scene, config)
+      // 更新本地配置
+      configs.value[scene] = result.config
+      return result
+    } catch (error) {
+      console.error('更新配置失败:', error)
+      throw error
+    } finally {
+      loading.value = false
+    }
+  }
+
+  return {
+    configs,
+    modelLists,
+    loading,
+    loadConfig,
+    updateConfig
+  }
+})
+

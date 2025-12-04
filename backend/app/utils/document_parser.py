@@ -56,34 +56,6 @@ class DocumentParser:
         else:
             raise ValueError(f"不支持的文件类型: {suffix}，仅支持 .pptx 和 .pdf")
     
-    def extract_text_positions(self, file_path: str, slide_or_page_number: int) -> Dict[str, Any]:
-        """提取文档指定页面/幻灯片的文本位置信息
-        
-        Args:
-            file_path: 文档文件路径
-            slide_or_page_number: 幻灯片/页面编号（从1开始）
-            
-        Returns:
-            包含文本位置列表和尺寸信息的字典
-        """
-        path = Path(file_path)
-        suffix = path.suffix.lower()
-        
-        if suffix == '.pptx':
-            result = self.ppt_parser.extract_text_positions(file_path, slide_or_page_number)
-            # 统一字段名：slide_dimensions -> dimensions
-            if result.get("slide_dimensions"):
-                result["dimensions"] = result.pop("slide_dimensions")
-            return result
-        elif suffix == '.pdf':
-            result = self.pdf_parser.extract_text_positions(file_path, slide_or_page_number)
-            # 统一字段名：page_dimensions -> dimensions
-            if result.get("page_dimensions"):
-                result["dimensions"] = result.pop("page_dimensions")
-            return result
-        else:
-            raise ValueError(f"不支持的文件类型: {suffix}，仅支持 .pptx 和 .pdf")
-    
     @staticmethod
     def is_supported(file_path: str) -> bool:
         """检查文件类型是否支持

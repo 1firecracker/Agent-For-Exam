@@ -2,15 +2,30 @@
   <el-container class="app-container">
     <el-header>
       <h1>Agent for Exam</h1>
+      <div class="header-right">
+        <el-button 
+          :icon="Setting" 
+          circle 
+          @click="showSettings = true"
+          title="设置"
+        />
+      </div>
     </el-header>
     <el-main>
       <router-view />
     </el-main>
+    
+    <!-- 设置对话框 -->
+    <SettingsDialog v-model="showSettings" />
   </el-container>
 </template>
 
 <script setup>
-// App 根组件
+import { ref } from 'vue'
+import { Setting } from '@element-plus/icons-vue'
+import SettingsDialog from './components/SettingsDialog.vue'
+
+const showSettings = ref(false)
 </script>
 
 <style>
@@ -38,6 +53,7 @@ body {
 .el-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   background-color: #409eff;
   color: white;
   padding: 0 20px;
@@ -48,6 +64,12 @@ body {
 .el-header h1 {
   font-size: 20px;
   font-weight: 500;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .el-main {

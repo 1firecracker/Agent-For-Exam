@@ -323,7 +323,10 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
                     elif chunk["type"] == "error":
                         yield f"{json.dumps({'error': chunk['content']})}\n"
             except Exception as e:
-                yield f"{json.dumps({'error': str(e)})}\n"
+                error_msg = str(e)
+                if "401" in error_msg or "Invalid token" in error_msg or "Unauthorized" in error_msg:
+                    error_msg = "API Key 无效或已过期，请在设置中检查并更新 API Key"
+                yield f"{json.dumps({'error': error_msg})}\n"
         
         return StreamingResponse(
             agent_stream(),
@@ -359,11 +362,35 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
                 lightrag = await service.lightrag_service.get_lightrag_for_conversation(conversation_id)
                 from lightrag import QueryParam
                 
+                # 临时替换 LLM 函数为聊天配置（用于查询）
+                original_llm_func = lightrag.llm_model_func
+                chat_llm_func = service.lightrag_service.get_chat_llm_func()
+                lightrag.llm_model_func = chat_llm_func
+                
                 # 使用 bypass 模式查询（包含历史对话）
                 bypass_param = QueryParam(mode="bypass", stream=True)
                 if history:
                     bypass_param.conversation_history = history
-                bypass_result = await lightrag.aquery_llm(request.query, param=bypass_param)
+                try:
+                    bypass_result = await lightrag.aquery_llm(request.query, param=bypass_param)
+                except Exception as e:
+                    error_msg = str(e)
+                    if "401" in error_msg or "Invalid token" in error_msg or "Unauthorized" in error_msg:
+                        error_msg = "API Key 无效或已过期，请在设置中检查并更新 API Key"
+                    yield f"{json.dumps({'error': error_msg})}\n"
+                    return
+                
+                # 恢复原始的 LLM 函数（用于文档抽取）
+                lightrag.llm_model_func = original_llm_func
+                
+                # 检查是否有错误状态
+                if bypass_result.get("status") == "failure":
+                    error_msg = bypass_result.get("message", "查询失败")
+                    if "401" in error_msg or "Invalid token" in error_msg or "Unauthorized" in error_msg:
+                        error_msg = "API Key 无效或已过期，请在设置中检查并更新 API Key"
+                    yield f"{json.dumps({'error': error_msg})}\n"
+                    return
+                
                 llm_response = bypass_result.get("llm_response", {})
                 
                 # 流式发送响应
@@ -375,7 +402,10 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
                                 if chunk:
                                     yield f"{json.dumps({'response': chunk})}\n"
                         except Exception as e:
-                            yield f"{json.dumps({'error': str(e)})}\n"
+                            error_msg = str(e)
+                            if "401" in error_msg or "Invalid token" in error_msg or "Unauthorized" in error_msg:
+                                error_msg = "API Key 无效或已过期，请在设置中检查并更新 API Key"
+                            yield f"{json.dumps({'error': error_msg})}\n"
                     else:
                         content = llm_response.get("content", "")
                         if content:
@@ -387,7 +417,10 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
                     else:
                         yield f"{json.dumps({'error': 'No response generated'})}\n"
             except Exception as e:
-                yield f"{json.dumps({'error': str(e)})}\n"
+                error_msg = str(e)
+                if "401" in error_msg or "Invalid token" in error_msg or "Unauthorized" in error_msg:
+                    error_msg = "API Key 无效或已过期，请在设置中检查并更新 API Key"
+                yield f"{json.dumps({'error': error_msg})}\n"
         
         return StreamingResponse(
             fast_bypass_stream(),
@@ -422,18 +455,57 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
                 newline_text = '\n\n'
                 yield f"{json.dumps({'response': newline_text})}\n"
                 
+                # 临时替换 LLM 函数为聊天配置（用于查询）
+                original_llm_func = lightrag.llm_model_func
+                chat_llm_func = service.lightrag_service.get_chat_llm_func()
+                lightrag.llm_model_func = chat_llm_func
+                
                 # 直接使用 bypass 模式查询（包含历史对话）
                 bypass_param = QueryParam(mode="bypass", stream=True)
                 if history:
                     bypass_param.conversation_history = history
-                bypass_result = await lightrag.aquery_llm(request.query, param=bypass_param)
+                try:
+                    bypass_result = await lightrag.aquery_llm(request.query, param=bypass_param)
+                except Exception as e:
+                    error_msg = str(e)
+                    if "401" in error_msg or "Invalid token" in error_msg or "Unauthorized" in error_msg:
+                        error_msg = "API Key 无效或已过期，请在设置中检查并更新 API Key"
+                    yield f"{json.dumps({'error': error_msg})}\n"
+                    return
+                
+                # 恢复原始的 LLM 函数（用于文档抽取）
+                lightrag.llm_model_func = original_llm_func
+                
+                # 检查是否有错误状态
+                if bypass_result.get("status") == "failure":
+                    error_msg = bypass_result.get("message", "查询失败")
+                    if "401" in error_msg or "Invalid token" in error_msg or "Unauthorized" in error_msg:
+                        error_msg = "API Key 无效或已过期，请在设置中检查并更新 API Key"
+                    yield f"{json.dumps({'error': error_msg})}\n"
+                    return
+                
                 llm_response = bypass_result.get("llm_response", {})
             else:
+                # 临时替换 LLM 函数为聊天配置（用于查询）
+                original_llm_func = lightrag.llm_model_func
+                chat_llm_func = service.lightrag_service.get_chat_llm_func()
+                lightrag.llm_model_func = chat_llm_func
+                
                 # 步骤2：执行查询（知识图谱不为空，包含历史对话）
                 param = QueryParam(mode=request.mode, stream=True)
                 if history:
                     param.conversation_history = history
-                result = await lightrag.aquery_llm(request.query, param=param)
+                try:
+                    result = await lightrag.aquery_llm(request.query, param=param)
+                except Exception as e:
+                    error_msg = str(e)
+                    if "401" in error_msg or "Invalid token" in error_msg or "Unauthorized" in error_msg:
+                        error_msg = "API Key 无效或已过期，请在设置中检查并更新 API Key"
+                    yield f"{json.dumps({'error': error_msg})}\n"
+                    return
+                
+                # 恢复原始的 LLM 函数（用于文档抽取）
+                lightrag.llm_model_func = original_llm_func
                 
                 # 步骤3：查询后验证结果
                 result_empty, no_content = await service.check_query_result_empty(result, kg_empty_before)
@@ -452,7 +524,7 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
                         need_fallback = True
                         warning_message = "⚠️ 未检索到相关文档，将基于通用知识回答："
                 elif result.get("status") == "failure":
-                    # 查询失败
+                    # 查询失败（非 401 错误）
                     need_fallback = True
                     warning_message = "⚠️ 未检索到相关文档，将基于通用知识回答："
                 
@@ -465,18 +537,49 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
                         newline_text = '\n\n'
                         yield f"{json.dumps({'response': newline_text})}\n"
                     
+                    # 临时替换 LLM 函数为聊天配置（用于查询）
+                    original_llm_func = lightrag.llm_model_func
+                    chat_llm_func = service.lightrag_service._get_llm_func(use_chat_config=True)
+                    lightrag.llm_model_func = chat_llm_func
+                    
                     # 使用 bypass 模式重新查询（包含历史对话）
                     bypass_param = QueryParam(mode="bypass", stream=True)
                     if history:
                         bypass_param.conversation_history = history
-                    bypass_result = await lightrag.aquery_llm(request.query, param=bypass_param)
+                    try:
+                        bypass_result = await lightrag.aquery_llm(request.query, param=bypass_param)
+                    except Exception as e:
+                        error_msg = str(e)
+                        if "401" in error_msg or "Invalid token" in error_msg or "Unauthorized" in error_msg:
+                            error_msg = "API Key 无效或已过期，请在设置中检查并更新 API Key"
+                        yield f"{json.dumps({'error': error_msg})}\n"
+                        return
                     
+                    # 恢复原始的 LLM 函数（用于文档抽取）
+                    lightrag.llm_model_func = original_llm_func
                     llm_response = bypass_result.get("llm_response", {})
                 else:
                     # 正常使用查询结果
                     llm_response = result.get("llm_response", {})
             
-            # 步骤4：流式发送响应
+            # 步骤4：检查是否有错误状态（在获取 llm_response 之前）
+            # 检查所有可能的结果来源
+            result_to_check = None
+            if kg_empty_before:
+                result_to_check = bypass_result
+            elif need_fallback:
+                result_to_check = bypass_result
+            else:
+                result_to_check = result
+            
+            if result_to_check and result_to_check.get("status") == "failure":
+                error_msg = result_to_check.get("message", "查询失败")
+                if "401" in error_msg or "Invalid token" in error_msg or "Unauthorized" in error_msg:
+                    error_msg = "API Key 无效或已过期，请在设置中检查并更新 API Key"
+                yield f"{json.dumps({'error': error_msg})}\n"
+                return
+            
+            # 步骤5：流式发送响应
             if llm_response.get("is_streaming"):
                 # 流式模式：逐块发送响应
                 response_stream = llm_response.get("response_iterator")
@@ -486,7 +589,10 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
                             if chunk:  # 只发送非空内容
                                 yield f"{json.dumps({'response': chunk})}\n"
                     except Exception as e:
-                        yield f"{json.dumps({'error': str(e)})}\n"
+                        error_msg = str(e)
+                        if "401" in error_msg or "Invalid token" in error_msg or "Unauthorized" in error_msg:
+                            error_msg = "API Key 无效或已过期，请在设置中检查并更新 API Key"
+                        yield f"{json.dumps({'error': error_msg})}\n"
                 else:
                     # 如果没有流式响应，发送完整内容
                     content = llm_response.get("content", "")
@@ -501,7 +607,11 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
                     yield f"{json.dumps({'error': 'No response generated'})}\n"
                     
         except Exception as e:
-            yield f"{json.dumps({'error': str(e)})}\n"
+            error_msg = str(e)
+            # 检测 401 错误
+            if "401" in error_msg or "Invalid token" in error_msg or "Unauthorized" in error_msg:
+                error_msg = "API Key 无效或已过期，请在设置中检查并更新 API Key"
+            yield f"{json.dumps({'error': error_msg})}\n"
     
     return StreamingResponse(
         stream_generator(),

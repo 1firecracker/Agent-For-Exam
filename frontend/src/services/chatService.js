@@ -87,7 +87,7 @@ class ChatService {
               // Agent 模式的思维脑图内容
               onChunk({ type: 'mindmap_content', content: parsed.mindmap_content })
             } else if (parsed.error) {
-              throw new Error(parsed.error)
+              onChunk({ type: 'error', content: parsed.error })
             }
           } catch (error) {
             console.error('解析流式响应失败:', line, error)

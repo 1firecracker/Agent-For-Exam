@@ -70,6 +70,12 @@ backend/*.json
 !backend/package.json
 !backend/package-lock.json
 
+# 加密密钥和配置文件（敏感信息）
+backend/data/.encryption_key
+backend/data/llm_config.json
+backend/.secrets/
+backend/.encryption_key
+
 # 图片缓存
 backend/uploads/image_cache/
 backend/uploads/conversations/

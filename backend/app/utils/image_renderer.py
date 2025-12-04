@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Tuple
 from datetime import datetime, timedelta
+from threading import Lock
 from PIL import Image
 import pdfplumber
 
@@ -114,7 +115,7 @@ class ImageRenderer:
         use_cache: bool = True,
         is_thumbnail: bool = False
     ) -> Optional[Path]:
-        """渲染PPTX幻灯片为图片（Windows使用COM接口）
+        """渲染PPTX幻灯片为图片（Windows使用COM接口，其他平台使用LibreOffice）
         
         Args:
             file_path: PPTX文件路径
@@ -126,112 +127,156 @@ class ImageRenderer:
         Returns:
             图片文件路径（如果成功）
         """
-        # 计算缓存路径
+        # 计算当前请求对应的缓存路径
         cache_path = self._get_cache_path(file_id, slide_number, "pptx", is_thumbnail)
         
-        # 检查缓存
+        # 如果当前页缓存有效，直接返回
         if use_cache and self._is_cache_valid(cache_path):
             return cache_path
         
-        # Windows环境：使用COM接口
-        if sys.platform == "win32":
-            try:
-                import comtypes.client
-                
-                # 创建PowerPoint应用对象
-                ppt_app = comtypes.client.CreateObject("PowerPoint.Application")
-                
-                # 尝试隐藏窗口（某些PowerPoint版本或设置可能不允许，捕获异常）
-                try:
-                    ppt_app.Visible = False
-                except Exception:
-                    # 如果隐藏失败，尝试最小化窗口
-                    try:
-                        ppt_app.WindowState = 2  # ppWindowMinimized = 2
-                    except Exception:
-                        # 如果都失败，继续执行（窗口会显示但不影响功能）
-                        pass
-                
-                # 打开演示文稿
-                presentation = ppt_app.Presentations.Open(str(Path(file_path).absolute()))
-                
-                try:
-                    # 获取幻灯片（slide_number从1开始，COM中也是从1开始）
-                    if slide_number < 1 or slide_number > presentation.Slides.Count:
-                        return None
-                    
-                    slide = presentation.Slides[slide_number]
-                    
-                    # 计算导出分辨率
-                    # PowerPoint导出使用像素，150 DPI ≈ 每英寸150像素
-                    # 标准幻灯片尺寸：10英寸宽 × 7.5英寸高
-                    if is_thumbnail:
-                        # 缩略图：较小尺寸
-                        width = 200
-                        height = 150
-                    else:
-                        # 全尺寸：按150 DPI计算（10*150 = 1500像素）
-                        width = int(10 * self.resolution)
-                        height = int(7.5 * self.resolution)
-                    
-                    # 确保缓存目录存在
-                    cache_path.parent.mkdir(parents=True, exist_ok=True)
-                    
-                    # 临时文件路径（使用绝对路径）
-                    temp_path = cache_path.parent / f"temp_{slide_number}_{file_id}.png"
-                    
-                    # 导出为PNG（使用绝对路径）
-                    slide.Export(
-                        str(temp_path.absolute()),
-                        "PNG",
-                        width,
-                        height
-                    )
-                    
-                    # 移动文件到缓存路径
-                    if temp_path.exists():
-                        # 如果目标文件已存在，先删除
-                        if cache_path.exists():
-                            cache_path.unlink()
-                        temp_path.replace(cache_path)
-                        # 清理临时文件（如果还存在）
-                        if temp_path.exists():
-                            temp_path.unlink()
-                    
-                    return cache_path if cache_path.exists() else None
-                    
-                finally:
-                    # 关闭演示文稿和应用
-                    try:
-                        presentation.Close()
-                    except:
-                        pass
-                    try:
-                        # 退出PowerPoint应用
-                        ppt_app.Quit()
-                    except:
-                        pass
-                    # 释放COM对象
-                    try:
-                        del presentation
-                    except:
-                        pass
-                    try:
-                        del ppt_app
-                    except:
-                        pass
+        # 为每个 file_id 使用独立的锁，避免并发重复渲染
+        global _pptx_render_locks
+        if '_pptx_render_locks' not in globals():
+            _pptx_render_locks = {}
+        if file_id not in _pptx_render_locks:
+            _pptx_render_locks[file_id] = Lock()
+        lock = _pptx_render_locks[file_id]
+
+        with lock:
+            # 加锁后再次检查当前页缓存，避免重复渲染
+            if use_cache and self._is_cache_valid(cache_path):
+                return cache_path
+
+            # Windows环境：使用COM接口
+            if sys.platform == "win32":
+                return self._render_pptx_with_powerpoint(
+                    file_path, slide_number, file_id, cache_path, is_thumbnail, use_cache
+                )
+            else:
+                # Linux/Mac环境：使用LibreOffice
+                return self._render_pptx_with_libreoffice(
+                    file_path, slide_number, file_id, cache_path, is_thumbnail
+                )
+    
+    def _render_pptx_with_powerpoint(
+        self,
+        file_path: str,
+        slide_number: int,
+        file_id: str,
+        cache_path: Path,
+        is_thumbnail: bool = False,
+        use_cache: bool = True
+    ) -> Optional[Path]:
+        """使用PowerPoint COM接口渲染PPTX幻灯片为图片（Windows）
+        
+        Args:
+            file_path: PPTX文件路径
+            slide_number: 幻灯片编号（从1开始）
+            file_id: 文件ID
+            cache_path: 缓存路径
+            is_thumbnail: 是否为缩略图
+            use_cache: 是否使用缓存
             
-            except ImportError:
-                print("Warning: comtypes not installed. PPTX rendering requires 'pip install comtypes'")
+        Returns:
+            图片文件路径（如果成功）
+        """
+        import comtypes.client
+        
+        # 统一缓存目录
+        cache_dir = cache_path.parent
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 创建PowerPoint应用对象
+        ppt_app = comtypes.client.CreateObject("PowerPoint.Application")
+        
+        # 尝试隐藏窗口
+        try:
+            ppt_app.Visible = False
+        except Exception:
+            try:
+                ppt_app.WindowState = 2  # ppWindowMinimized
+            except Exception:
+                pass
+        
+        # 打开演示文稿
+        presentation = ppt_app.Presentations.Open(str(Path(file_path).absolute()))
+        
+        try:
+            total_slides = presentation.Slides.Count
+            if total_slides < 1:
                 return None
-            except Exception as e:
-                print(f"Error rendering PPTX slide {slide_number}: {e}")
-                return None
-        else:
-            # Linux/Mac环境：使用LibreOffice
-            return self._render_pptx_with_libreoffice(
-                file_path, slide_number, file_id, cache_path, is_thumbnail
-            )
+
+            # 计算导出尺寸
+            full_width = int(10 * self.resolution)
+            full_height = int(7.5 * self.resolution)
+            thumb_width = 200
+            thumb_height = 150
+
+            # 一次性预渲染整份 PPT：为所有页生成大图和缩略图
+            for idx in range(1, total_slides + 1):
+                slide = presentation.Slides[idx]
+
+                # 大图缓存路径
+                full_cache = self._get_cache_path(file_id, idx, "pptx", False)
+                # 缩略图缓存路径
+                thumb_cache = self._get_cache_path(file_id, idx, "pptx", True)
+
+                # 渲染大图（如果需要）
+                if not (use_cache and self._is_cache_valid(full_cache)):
+                    full_cache.parent.mkdir(parents=True, exist_ok=True)
+                    temp_full = full_cache.parent / f"temp_full_{idx}_{file_id}.png"
+                    slide.Export(
+                        str(temp_full.absolute()),
+                        "PNG",
+                        full_width,
+                        full_height
+                    )
+                    if temp_full.exists():
+                        if full_cache.exists():
+                            full_cache.unlink()
+                        temp_full.replace(full_cache)
+                        if temp_full.exists():
+                            temp_full.unlink()
+
+                # 渲染缩略图（如果需要）
+                if not (use_cache and self._is_cache_valid(thumb_cache)):
+                    thumb_cache.parent.mkdir(parents=True, exist_ok=True)
+                    temp_thumb = thumb_cache.parent / f"temp_thumb_{idx}_{file_id}.png"
+                    slide.Export(
+                        str(temp_thumb.absolute()),
+                        "PNG",
+                        thumb_width,
+                        thumb_height
+                    )
+                    if temp_thumb.exists():
+                        if thumb_cache.exists():
+                            thumb_cache.unlink()
+                        temp_thumb.replace(thumb_cache)
+                        if temp_thumb.exists():
+                            temp_thumb.unlink()
+
+            # 预渲染完成后，返回当前请求的那一页
+            target_cache = self._get_cache_path(file_id, slide_number, "pptx", is_thumbnail)
+            return target_cache if target_cache.exists() else None
+            
+        finally:
+            # 关闭演示文稿和应用
+            try:
+                presentation.Close()
+            except:
+                pass
+            try:
+                ppt_app.Quit()
+            except:
+                pass
+            try:
+                del presentation
+            except:
+                pass
+            try:
+                del ppt_app
+            except:
+                pass
     
     def _render_pptx_with_libreoffice(
         self,
@@ -271,9 +316,7 @@ class ImageRenderer:
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_output_dir = Path(temp_dir)
                 
-                # LibreOffice命令：转换为PDF（因为LibreOffice不能直接导出单页PNG）
-                # 注意：LibreOffice的--convert-to png会将所有幻灯片导出为单独的PNG文件
-                # 文件命名格式：原始文件名_slide编号.png（从0开始）
+                # LibreOffice命令：转换为PNG
                 cmd = [
                     libreoffice_cmd,
                     "--headless",
@@ -287,7 +330,7 @@ class ImageRenderer:
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    timeout=60,  # 60秒超时
+                    timeout=60,
                     check=False
                 )
                 
@@ -296,36 +339,15 @@ class ImageRenderer:
                     return None
                 
                 # 查找生成的PNG文件
-                # LibreOffice会将PPTX转换为多个PNG文件，命名规则：
-                # 如果原文件是 "file.pptx"，生成的可能是：
-                # - file_1.png, file_2.png, ... (取决于幻灯片数量)
-                # 或者: file.png (第一张幻灯片)
-                # 或者: file-0.png, file-1.png, ...
-                
-                # 尝试多种命名规则
                 base_name = Path(file_path).stem
-                possible_patterns = [
-                    f"{base_name}_{slide_number}.png",  # file_1.png
-                    f"{base_name}-{slide_number - 1}.png",  # file-0.png (从0开始)
-                    f"{base_name}.png",  # file.png (第一张幻灯片)
-                ]
-                
-                # 如果slide_number是1，也可能就是文件名.png
-                if slide_number == 1:
-                    possible_patterns.insert(0, f"{base_name}.png")
-                
-                # 搜索所有PNG文件，找到对应幻灯片的
                 png_files = list(temp_output_dir.glob("*.png"))
                 
                 if not png_files:
                     print(f"No PNG files generated by LibreOffice in {temp_output_dir}")
                     return None
                 
-                # 如果只有一张幻灯片，直接使用第一个文件
-                if len(png_files) == 1 and slide_number == 1:
-                    source_file = png_files[0]
-                elif slide_number <= len(png_files):
-                    # 按文件名排序，取第slide_number-1个（因为数组从0开始）
+                # 找到对应幻灯片的PNG文件
+                if slide_number <= len(png_files):
                     png_files_sorted = sorted(png_files, key=lambda x: x.name)
                     source_file = png_files_sorted[slide_number - 1]
                 else:
@@ -341,9 +363,7 @@ class ImageRenderer:
                 
                 # 如果是缩略图，需要调整大小
                 if is_thumbnail and source_file.exists():
-                    from PIL import Image
                     with Image.open(source_file) as img:
-                        # 缩略图尺寸
                         img.thumbnail((200, 150), Image.Resampling.LANCZOS)
                         img.save(cache_path, format="PNG", optimize=True)
                 else:

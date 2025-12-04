@@ -189,7 +189,7 @@ class AgentService:
             
             async for chunk in self._call_llm_with_tools_round(
                 conversation_id,
-            system_prompt,
+                system_prompt,
                 current_messages,
                 functions
             ):
@@ -469,15 +469,23 @@ class AgentService:
             
             llm_messages.append(cleaned_msg)
         
+        # 使用聊天场景的配置
+        from app.services.config_service import config_service
+        chat_config = config_service.get_config("chat")
+        binding = chat_config.get("binding", config.settings.chat_llm_binding)
+        model = chat_config.get("model", config.settings.chat_llm_model)
+        api_key = chat_config.get("api_key", config.settings.chat_llm_binding_api_key)
+        host = chat_config.get("host", config.settings.chat_llm_binding_host)
+        
         # 调用 LLM API
-        api_url = f"{config.settings.llm_binding_host}/chat/completions"
+        api_url = f"{host}/chat/completions"
         headers = {
-            "Authorization": f"Bearer {config.settings.llm_binding_api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
         
         payload = {
-            "model": config.settings.llm_model,
+            "model": model,
             "messages": llm_messages,
             "stream": True,
             "temperature": 0.7
@@ -498,10 +506,12 @@ class AgentService:
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()
-                        yield {
-                            "type": "error",
-                            "content": f"LLM API 错误: {response.status}, {error_text}"
-                        }
+                        # 401 错误：API Key 无效
+                        if response.status == 401:
+                            error_msg = "API Key 无效或已过期，请在设置中检查并更新 API Key"
+                        else:
+                            error_msg = f"LLM API 错误: {response.status}, {error_text}"
+                        yield {"type": "error", "content": error_msg}
                         return
                     
                     accumulated_content = ""
@@ -682,32 +692,49 @@ class AgentService:
         system_prompt: str,
         conversation_history: Optional[List[Dict]],
         user_query: str,
-        api_url: str,
-        headers: Dict[str, str]
+        api_url: Optional[str] = None,
+        headers: Optional[Dict[str, str]] = None
     ) -> AsyncIterator[Dict[str, Any]]:
         """基于工具执行结果生成最终回答"""
         print(f"🔄 [Agent] 开始生成最终回答，工具结果数量: {len(tool_results)}")
+        
+        # 使用聊天场景的配置
+        from app.services.config_service import config_service
+        chat_config = config_service.get_config("chat")
+        binding = chat_config.get("binding", config.settings.chat_llm_binding)
+        model = chat_config.get("model", config.settings.chat_llm_model)
+        api_key = chat_config.get("api_key", config.settings.chat_llm_binding_api_key)
+        host = chat_config.get("host", config.settings.chat_llm_binding_host)
+        
+        # 如果未提供 api_url 和 headers，使用聊天配置
+        if not api_url:
+            api_url = f"{host}/chat/completions"
+        if not headers:
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
 
         # 1. 将工具结果格式化为 LLM 需要的 tool 消息
         tool_messages: List[Dict[str, Any]] = []
         tool_result_index = 0
-
+        
         for i, tool_call in enumerate(tool_calls_buffer):
             func = tool_call.get("function", {})
             if not func.get("name"):
                 continue
-
+                                
             tool_call_id = tool_call.get("id") or f"call_{i}"
             if not isinstance(tool_call_id, str):
                 tool_call_id = str(tool_call_id)
-
+                                
             if tool_result_index < len(tool_results):
                 tool_result = tool_results[tool_result_index]
                 result_data = tool_result.get("result", {})
                 result_content = self._format_tool_result(result_data)
                 if not isinstance(result_content, str):
                     result_content = str(result_content) if result_content is not None else ""
-
+                
                 tool_messages.append(
                     {
                         "role": "tool",
@@ -716,24 +743,24 @@ class AgentService:
                     }
                 )
                 tool_result_index += 1
-
+                            
         # 2. 构建完整的消息历史（system + 历史对话 + 当前 user）
         complete_messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt}
         ]
-
+                            
         if conversation_history:
             for msg in conversation_history:
                 cleaned_msg = msg.copy()
                 role = cleaned_msg.get("role")
-
+                
                 # 确保 content 字段存在且为字符串
                 content = cleaned_msg.get("content")
                 if content is None:
                     cleaned_msg["content"] = ""
                 elif not isinstance(content, str):
                     cleaned_msg["content"] = str(content)
-
+                
                 # 对于 tool 消息，确保 tool_call_id 存在且有效
                 if role == "tool":
                     tool_call_id = cleaned_msg.get("tool_call_id")
@@ -744,7 +771,7 @@ class AgentService:
                             "⚠️ [Agent] 警告: 历史对话中的 tool 消息缺少或包含空的 tool_call_id，跳过此消息"
                         )
                         continue
-
+                
                 # 对于 assistant 消息，如果有 tool_calls，确保格式正确
                 if role == "assistant" and "tool_calls" in cleaned_msg:
                     tool_calls = cleaned_msg.get("tool_calls", [])
@@ -783,27 +810,27 @@ class AgentService:
                         cleaned_msg["tool_calls"] = valid_tool_calls
                         if not valid_tool_calls:
                             cleaned_msg.pop("tool_calls", None)
-
+                
                 complete_messages.append(cleaned_msg)
-
+                            
         # 添加当前用户查询
         complete_messages.append({"role": "user", "content": user_query})
-
+                            
         # 3. 构建 assistant 的 tool_calls 消息
         tool_calls_list: List[Dict[str, Any]] = []
         for i, tool_call in enumerate(tool_calls_buffer):
             func = tool_call.get("function", {})
             if not func.get("name"):
                 continue
-
+            
             tool_call_id = tool_call.get("id") or f"call_{i}"
             if not isinstance(tool_call_id, str):
                 tool_call_id = str(tool_call_id)
-
+            
             function_name = func.get("name", "")
             if not isinstance(function_name, str):
                 function_name = str(function_name)
-
+            
             function_arguments = func.get("arguments", "{}")
             if not isinstance(function_arguments, str):
                 function_arguments = (
@@ -819,7 +846,7 @@ class AgentService:
                 continue
             if not function_arguments:
                 function_arguments = "{}"
-
+            
             tool_calls_list.append(
                 {
                     "id": tool_call_id,
@@ -830,7 +857,7 @@ class AgentService:
                     },
                 }
             )
-
+        
         if tool_calls_list:
             assistant_message = {
                 "role": "assistant",
@@ -840,10 +867,10 @@ class AgentService:
             complete_messages.append(assistant_message)
         else:
             print("    ⚠️ 警告: tool_calls_list 为空，不添加 assistant 消息")
-
+                            
         # 4. 添加工具结果消息
         complete_messages.extend(tool_messages)
-
+        
         # 5. 打印调试信息（仅显示最后几条）
         print(f"📝 [Agent] 构建的消息历史（共 {len(complete_messages)} 条）:")
         start_index = max(0, len(complete_messages) - 3)
@@ -876,7 +903,7 @@ class AgentService:
                     f"  [{i}] {role}: content_type={type(content).__name__}, "
                     f"content_preview={str(content)[:50]}..."
                 )
-
+        
         # 6. 确保所有消息都有必需的字段
         validated_messages: List[Dict[str, Any]] = []
         for msg in complete_messages:
@@ -921,28 +948,28 @@ class AgentService:
             else:
                 if "content" not in msg:
                     msg["content"] = ""
-
+            
             validated_messages.append(msg)
-
+        
         complete_messages = validated_messages
-
+                            
         # 7. 构建最终 payload
         final_payload = {
-            "model": config.settings.llm_model,
+            "model": model,
             "messages": complete_messages,
             "stream": True,
             "temperature": 0.7,
         }
-
+        
         print("📦 [Agent] 最终 payload 结构:")
         print(f"  - model: {final_payload.get('model')}")
         print(f"  - messages count: {len(final_payload.get('messages', []))}")
         print(f"  - stream: {final_payload.get('stream')}")
         print(f"  - temperature: {final_payload.get('temperature')}")
         print(f"  - has tools: {'tools' in final_payload}")
-
+        
         print("🚀 [Agent] 二次调用 LLM 生成最终回答...")
-
+                            
         # 8. 流式调用 LLM 生成最终回答
         async with aiohttp.ClientSession() as final_session:
             async with final_session.post(
@@ -957,18 +984,18 @@ class AgentService:
                     async for line in final_response.content:
                         if not line:
                             continue
-
+                        
                         line_text = line.decode("utf-8")
                         for chunk in line_text.split("\n"):
                             if not chunk.strip() or chunk.startswith(":"):
                                 continue
-
+                            
                             if chunk.startswith("data: "):
                                 chunk = chunk[6:]
-
+                            
                             if chunk.strip() == "[DONE]":
                                 return
-
+                            
                             try:
                                 data = json.loads(chunk)
                             except json.JSONDecodeError:
@@ -996,13 +1023,13 @@ class AgentService:
                             }
                 else:
                     error_text = await final_response.text()
-                    print(
-                        f"❌ [Agent] LLM 最终回答生成失败: {final_response.status}, {error_text}"
-                    )
-                    yield {
-                        "type": "error",
-                        "content": f"LLM 最终回答生成失败: {final_response.status}, {error_text}",
-                    }
+                    print(f"❌ [Agent] LLM 最终回答生成失败: {final_response.status}, {error_text}")
+                    # 401 错误：API Key 无效
+                    if final_response.status == 401:
+                        error_msg = "API Key 无效或已过期，请在设置中检查并更新 API Key"
+                    else:
+                        error_msg = f"LLM API 错误: {final_response.status}, {error_text}"
+                    yield {"type": "error", "content": error_msg}
     
     def _format_tool_result(self, result_data: Dict[str, Any]) -> str:
         """格式化工具执行结果为字符串，用于发送回 LLM

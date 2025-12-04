@@ -58,7 +58,7 @@ class MindMapService:
 
         mindmap_file.write_text(combined_content, encoding="utf-8")
         print(f"[✅ 思维脑图已保存] {mindmap_file}")
-
+    
     def _extract_last_document_block(self, full_mindmap: str) -> Optional[str]:
         """从完整脑图内容中提取最后一个文档块（最后一个以 ## 开头的部分）"""
         if not full_mindmap:
@@ -75,10 +75,10 @@ class MindMapService:
 
         block = "\n".join(lines[last_index:]).strip()
         return block if block else None
-
+    
     def _build_mindmap_prompt(
-        self,
-        text: str,
+        self, 
+        text: str, 
         conversation_title: str,
         document_filename: str,
         existing_mindmap: Optional[str] = None,
@@ -211,8 +211,8 @@ class MindMapService:
             return base_prompt + sample_section + f"\n\n文档内容：\n{text}"
     
     async def generate_mindmap_stream(
-        self,
-        conversation_id: str,
+        self, 
+        conversation_id: str, 
         document_text: str,
         conversation_title: str,
         document_filename: str,
@@ -241,25 +241,33 @@ class MindMapService:
         sample_mindmap = None
         if existing_full:
             sample_mindmap = self._extract_last_document_block(existing_full)
-
+        
         # 构建 Prompt（传入示例脑图，只生成当前文档的脑图块，从 `## 当前文档名` 开始）
         prompt = self._build_mindmap_prompt(
-            document_text,
-            conversation_title,
+            document_text, 
+            conversation_title, 
             document_filename,
             existing_mindmap=None,
             sample_mindmap=sample_mindmap
         )
         
+        # 使用思维导图场景的配置
+        from app.services.config_service import config_service
+        mindmap_config = config_service.get_config("mindmap")
+        binding = mindmap_config.get("binding", config.settings.mindmap_llm_binding)
+        model = mindmap_config.get("model", config.settings.mindmap_llm_model)
+        api_key = mindmap_config.get("api_key", config.settings.mindmap_llm_binding_api_key)
+        host = mindmap_config.get("host", config.settings.mindmap_llm_binding_host)
+        
         # 调用 LLM API（流式）
-        api_url = f"{config.settings.llm_binding_host}/chat/completions"
+        api_url = f"{host}/chat/completions"
         headers = {
-            "Authorization": f"Bearer {config.settings.llm_binding_api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
         
         payload = {
-            "model": config.settings.llm_model,
+            "model": model,
             "messages": [
                 {
                     "role": "system",

@@ -77,10 +77,16 @@ async def get_slide_image(
         response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
         response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
+    except HTTPException:
+        raise
     except Exception as e:
+        import traceback
+        error_detail = str(e) if str(e) else f"{type(e).__name__}: {repr(e)}"
+        print(f"获取图片失败 (slide {slide_id}): {error_detail}")
+        print(traceback.format_exc())
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"获取图片失败: {str(e)}"
+            detail=f"获取图片失败: {error_detail}"
         )
 
 

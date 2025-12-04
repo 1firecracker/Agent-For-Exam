@@ -29,6 +29,16 @@ class LightRAGService:
             cls._instance._initialized_instances = {}
         return cls._instance
     
+    def clear_all_instances(self):
+        """清除所有已缓存的 LightRAG 实例（配置更新时调用）"""
+        self._lightrag_instances.clear()
+        self._initialized_instances.clear()
+        print("🔄 [LightRAG] 已清除所有缓存的实例，下次使用时将使用新配置重新创建")
+    
+    def get_chat_llm_func(self):
+        """获取聊天场景的 LLM 函数（用于查询）"""
+        return self._get_llm_func(use_chat_config=True)
+    
     async def _init_lightrag_for_conversation(self, conversation_id: str) -> LightRAG:
         """为指定对话初始化 LightRAG 实例
         
@@ -76,28 +86,56 @@ class LightRAGService:
         
         return lightrag
     
-    def _get_llm_func(self):
+    def _get_llm_func(self, use_chat_config: bool = False):
         """获取 LLM 函数
+        
+        Args:
+            use_chat_config: 如果为 True，使用聊天场景配置；否则使用知识图谱场景配置
         
         支持:
         - openai: OpenAI API 或兼容 OpenAI API 的服务（如硅基流动）
         - ollama: Ollama 本地模型
         """
-        if config.settings.llm_binding == "openai":
+        from app.services.config_service import config_service
+        
+        # 清除配置缓存，确保读取最新配置
+        config_service._config_cache = None
+        
+        if use_chat_config:
+            # 使用聊天场景的配置（用于查询）
+            scene_config = config_service.get_config("chat")
+            binding = scene_config.get("binding", config.settings.chat_llm_binding)
+            model = scene_config.get("model", config.settings.chat_llm_model)
+            api_key = scene_config.get("api_key", config.settings.chat_llm_binding_api_key)
+            host = scene_config.get("host", config.settings.chat_llm_binding_host)
+            error_msg = "聊天 LLM API Key 未配置"
+            print(f"🔧 [LightRAG] 使用聊天配置: binding={binding}, model={model}, host={host[:50]}...")
+        else:
+            # 使用知识图谱场景的配置（用于文档抽取）
+            scene_config = config_service.get_config("knowledge_graph")
+            binding = scene_config.get("binding", config.settings.kg_llm_binding)
+            model = scene_config.get("model", config.settings.kg_llm_model)
+            api_key = scene_config.get("api_key", config.settings.kg_llm_binding_api_key)
+            host = scene_config.get("host", config.settings.kg_llm_binding_host)
+            error_msg = "知识图谱 LLM API Key 未配置"
+            print(f"🔧 [LightRAG] 使用知识图谱配置: binding={binding}, model={model}, host={host[:50]}...")
+        
+        if binding == "openai" or binding == "siliconflow":
             from lightrag.llm.openai import openai_complete_if_cache
             
-            api_key = config.settings.llm_binding_api_key
             if not api_key:
-                raise ValueError("LLM_BINDING_API_KEY 未配置")
+                raise ValueError(error_msg)
 
-            llm_host = config.settings.llm_binding_host or ""
-            is_siliconcloud_host = llm_host.startswith("https://api.siliconflow.cn")
+            is_siliconcloud_host = host.startswith("https://api.siliconflow.cn")
             
             # 支持 OpenAI 兼容 API（如硅基流动）
             # 使用 openai_complete_if_cache 函数，支持自定义模型名
             def llm_func(prompt, **kwargs):
-                # 移除可能的冲突参数
+                # 移除 LightRAG 内部参数（这些参数不应该传递给实际的 API 调用）
                 kwargs.pop('api_base', None)
+                kwargs.pop('_priority', None)  # LightRAG 内部优先级参数
+                kwargs.pop('_timeout', None)  # LightRAG 内部超时参数
+                kwargs.pop('_queue_timeout', None)  # LightRAG 内部队列超时参数
 
                 if is_siliconcloud_host:
                     existing_extra_body = kwargs.get("extra_body") or {}
@@ -110,25 +148,25 @@ class LightRAGService:
 
                 # 使用配置的模型名，传递 base_url 和 api_key
                 return openai_complete_if_cache(
-                    model=config.settings.llm_model,
+                    model=model,
                     prompt=prompt,
                     api_key=api_key,
-                    base_url=config.settings.llm_binding_host,
+                    base_url=host,
                     **kwargs
                 )
             return llm_func
-        elif config.settings.llm_binding == "ollama":
+        elif binding == "ollama":
             from lightrag.llm.ollama import ollama_model_complete
             
             return lambda prompt, **kwargs: ollama_model_complete(
                 prompt,
-                model=config.settings.llm_model,
-                host=config.settings.embedding_binding_host,
+                model=model,
+                host=host,
                 timeout=config.settings.timeout,
                 **kwargs
             )
         else:
-            raise ValueError(f"不支持的 LLM binding: {config.settings.llm_binding}")
+            raise ValueError(f"不支持的 LLM binding: {binding}")
     
     def _get_embedding_func(self) -> EmbeddingFunc:
         """获取 Embedding 函数
@@ -270,7 +308,7 @@ class LightRAGService:
             return None
     
     async def query(self, conversation_id: str, query: str, mode: str = "mix", conversation_history: Optional[List[Dict[str, str]]] = None) -> Any:
-        """在指定对话的知识图谱中查询
+        """在指定对话的知识图谱中查询（使用聊天场景配置）
         
         Args:
             conversation_id: 对话ID
@@ -282,9 +320,20 @@ class LightRAGService:
             查询结果
         """
         lightrag = await self.get_lightrag_for_conversation(conversation_id)
+        
+        # 临时替换 LLM 函数为聊天配置（用于查询）
+        original_llm_func = lightrag.llm_model_func
+        chat_llm_func = self._get_llm_func(use_chat_config=True)
+        lightrag.llm_model_func = chat_llm_func
+        
         from lightrag import QueryParam
         param = QueryParam(mode=mode)
         if conversation_history:
             param.conversation_history = conversation_history
+        
         result = await lightrag.aquery(query, param=param)
+        
+        # 恢复原始的 LLM 函数（用于文档抽取）
+        lightrag.llm_model_func = original_llm_func
+        
         return result

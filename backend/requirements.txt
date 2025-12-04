@@ -6,6 +6,7 @@ python-multipart==0.0.6
 # 配置管理
 pydantic-settings==2.1.0
 python-dotenv==1.0.0
+cryptography>=41.0.0
 
 # HTTP 客户端
 requests>=2.31.0

@@ -4,6 +4,8 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from app.config import settings
 from app.api import conversations, documents, graph, images, exercises, mindmap_routes
+from app.api import settings as settings_api
+from app.services.config_service import config_service
 
 app = FastAPI(
     title="Agent for Exam",
@@ -35,6 +37,14 @@ app.include_router(graph.router)
 app.include_router(images.router)
 app.include_router(exercises.router)
 app.include_router(mindmap_routes.router)
+app.include_router(settings_api.router)
+
+# 启动时加载配置
+@app.on_event("startup")
+async def startup_event():
+    """启动时加载配置"""
+    config_service.reload_all_configs()
+    print("✅ 配置服务已加载")
 
 @app.get("/")
 async def root():
