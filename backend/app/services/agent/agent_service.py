@@ -130,6 +130,7 @@ class AgentService:
 - 末尾有完整的 References 部分
 - 每个引用都标注了来源类型（`[文档]` 或 `[知识图谱]`）
 - 每个引用都包含了可追溯的原文内容
+- 对于数学公式, 行内公式用 $...$ 块级公式用 $$...$$
 """
     
     async def process_user_query(

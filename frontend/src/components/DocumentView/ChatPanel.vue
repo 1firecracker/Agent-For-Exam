@@ -214,6 +214,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { Promotion, Warning, InfoFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { marked } from 'marked'
+import katex from 'katex'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useGraphStore } from '../../stores/graphStore'
@@ -743,13 +744,41 @@ const formatMessageWithWarning = (text) => {
   return html
 }
 
+// 在 Markdown 文本中先渲染 LaTeX 为 KaTeX HTML
+const renderMathInText = (text) => {
+  if (!text) return ''
+  
+  let result = text
+
+  // 先处理块级公式：$$ ... $$
+  result = result.replace(/\$\$([\s\S]+?)\$\$/g, (match, tex) => {
+    const html = katex.renderToString(tex.trim(), {
+      displayMode: true,
+      throwOnError: false
+    })
+    return html
+  })
+
+  // 再处理行内公式：$ ... $（避免与块级公式冲突）
+  result = result.replace(/\$([^$\n]+?)\$/g, (match, tex) => {
+    const html = katex.renderToString(tex.trim(), {
+      displayMode: false,
+      throwOnError: false
+    })
+    return html
+  })
+
+  return result
+}
+
 // 使用 marked 库进行 Markdown 格式化
 const formatEnhancedMarkdown = (text) => {
   if (!text) return ''
   
   try {
-    // 使用 marked 解析 Markdown
-    const html = marked.parse(text)
+    // 先把 LaTeX 替换为 KaTeX HTML，再交给 marked 解析 Markdown
+    const source = renderMathInText(text)
+    const html = marked.parse(source)
     return html
   } catch (error) {
     console.error('Markdown 解析错误:', error)
@@ -767,7 +796,9 @@ const formatMarkdown = (text) => {
   if (!text) return ''
   
   try {
-    return marked.parse(text)
+    // 先把 LaTeX 替换为 KaTeX HTML，再交给 marked 解析 Markdown
+    const source = renderMathInText(text)
+    return marked.parse(source)
   } catch (error) {
     console.error('Markdown 解析错误:', error)
     return text
