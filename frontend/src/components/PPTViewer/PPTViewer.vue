@@ -5,8 +5,6 @@
       <template #header>
         <div class="viewer-header">
           <div class="header-left">
-            <el-text size="large" strong>PPT 查看器</el-text>
-            <el-divider direction="vertical" />
             <el-select
               v-model="selectedFileId"
               placeholder="选择文档（PPTX/PDF）"
@@ -299,13 +297,19 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
+  padding: 8px 16px; /* 减少上下内边距，从 12px 改为 8px */
+}
+
+.viewer-card :deep(.el-card__header) {
+  padding: 8px 16px; /* 覆盖 Element Plus 默认的 header padding */
 }
 
 .header-left {
   display: flex;
   align-items: center;
   gap: 12px;
+  width: fit-content;
+  min-width: 320px; /* 略宽于 el-select 的 300px */
 }
 
 .header-right {

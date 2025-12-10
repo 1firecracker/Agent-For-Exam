@@ -40,7 +40,6 @@
             </el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="png">导出为 PNG</el-dropdown-item>
                 <el-dropdown-item command="svg">导出为 SVG</el-dropdown-item>
                 <el-dropdown-item command="xmind">导出为 XMind</el-dropdown-item>
               </el-dropdown-menu>
@@ -131,7 +130,6 @@ import { useDocumentStore } from '../../stores/documentStore'
 // 导入 markmap（使用标准 ES6 import）
 import { Markmap } from 'markmap-view'
 import { Transformer } from 'markmap-lib'
-import html2canvas from 'html2canvas'
 
 const mindmapStore = useMindMapStore()
 const convStore = useConversationStore()

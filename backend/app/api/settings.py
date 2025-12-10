@@ -16,13 +16,13 @@ MODEL_LISTS = {
     "siliconflow": [
         "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         "deepseek-ai/DeepSeek-V3",
-        "Pro/deepseek-ai/DeepSeek-V3.2-Exp",
+        "deepseek-ai/DeepSeek-V3.2-Exp",
+        "MiniMaxAI/MiniMax-M2",
+        "moonshotai/Kimi-K2-Thinking",
         "Qwen/Qwen2.5-72B-Instruct",
         "Qwen/Qwen2.5-32B-Instruct",
         "Qwen/Qwen2.5-14B-Instruct",
         "Qwen/Qwen2.5-7B-Instruct",
-        "meta-llama/Llama-3.1-70B-Instruct",
-        "meta-llama/Llama-3.1-8B-Instruct"
     ]
 }
 

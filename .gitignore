@@ -62,6 +62,9 @@ frontend/.vite/
 frontend/dist-ssr/
 *.local
 
+# 前端文档规划（忽略）
+frontend/docs/
+
 # 后端数据文件（运行时生成）
 backend/data/
 backend/uploads/
