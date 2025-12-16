@@ -1,0 +1,71 @@
+@import url('https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&family=Inter:wght@300;400;500;600&display=swap');
+
+:root {
+  /* Claude-inspired Palette */
+  --bg-app: #FAF9F6;          /* 暖白背景 (Off-white) */
+  --bg-sidebar: #F4F3F0;      /* 侧边栏背景 (Warm Gray) */
+  --bg-card: #FFFFFF;         /* 卡片背景 */
+  
+  --text-primary: #1A1A1A;    /* 深灰文本 (Near Black) */
+  --text-secondary: #5E5E5E;  /* 次要文本 */
+  --text-tertiary: #8C8C8C;   /* 辅助文本 */
+
+  --color-accent: #DA7756;    /* 陶土色 (Terracotta) - 主强调色 */
+  --color-accent-hover: #C56545;
+  --color-accent-light: #FDF1ED; /* 浅陶土色背景 */
+
+  --border-subtle: #E6E4DD;
+  --border-focus: #DA7756;
+
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.02);
+  --shadow-float: 0 8px 24px rgba(0, 0, 0, 0.06);
+
+  /* Fonts */
+  --font-serif: 'Merriweather', serif;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  /* Element Plus Override Variables (will be used by Element) */
+  --el-color-primary: var(--color-accent);
+  --el-color-primary-light-3: #E69D84;
+  --el-color-primary-light-5: #EDB6A3;
+  --el-color-primary-light-7: #F4CFC3;
+  --el-color-primary-light-8: #F8DCD4;
+  --el-color-primary-light-9: #FCF1ED;
+  --el-color-primary-dark-2: #AF5F45;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-sans);
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-serif);
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 0.5em;
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D1D5DB;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9CA3AF;
+}

@@ -9,6 +9,7 @@ from app.services.document_service import DocumentService
 from app.utils.image_renderer import ImageRenderer
 
 router = APIRouter(tags=["images"])
+logger = config.get_logger("app.images")
 
 # 初始化图片渲染器
 image_renderer = ImageRenderer(
@@ -73,17 +74,23 @@ async def get_slide_image(
             media_type="image/png",
             filename=f"slide_{slide_id}.png"
         )
-        # 显式添加CORS头（确保图片可以跨域加载）
-        response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
-        response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
     except HTTPException:
         raise
     except Exception as e:
         import traceback
         error_detail = str(e) if str(e) else f"{type(e).__name__}: {repr(e)}"
-        print(f"获取图片失败 (slide {slide_id}): {error_detail}")
-        print(traceback.format_exc())
+        logger.error(
+            "获取图片失败",
+            extra={
+                "event": "image.get_failed",
+                "conversation_id": conversation_id,
+                "document_id": file_id,
+                "slide_id": slide_id,
+                "error_message": error_detail,
+                "stack_trace": traceback.format_exc(),
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取图片失败: {error_detail}"
@@ -145,9 +152,6 @@ async def get_slide_thumbnail(
             media_type="image/png",
             filename=f"slide_{slide_id}_thumb.png"
         )
-        # 显式添加CORS头（确保图片可以跨域加载）
-        response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
-        response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
     except Exception as e:
         raise HTTPException(

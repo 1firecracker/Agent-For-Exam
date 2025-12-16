@@ -72,7 +72,10 @@ backend/*.json
 !backend/requirements.txt
 !backend/package.json
 !backend/package-lock.json
+backend/docs/
 
+# 根目录文档
+docs/
 # 加密密钥和配置文件（敏感信息）
 backend/data/.encryption_key
 backend/data/llm_config.json

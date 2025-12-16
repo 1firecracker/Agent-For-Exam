@@ -1,6 +1,9 @@
 from pathlib import Path
 from pydantic_settings import BaseSettings
 from typing import List
+import logging
+import json
+from datetime import datetime
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -11,7 +14,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     debug: bool = True
-    cors_origins: List[str] = ["http://localhost:5173", "http://localhost:3000"]
+    cors_origins: List[str] = ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"]
     
     # LightRAG 配置（后续使用）
     lightrag_working_dir: str = "./data/.lightrag"
@@ -47,10 +50,10 @@ class Settings(BaseSettings):
     mindmap_llm_binding_host: str = "https://api.siliconflow.cn/v1"
     
     # Embedding 配置
-    embedding_binding: str = "siliconcloud"
+    embedding_binding: str = "siliconflow"
     embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
     embedding_dim: int = 1024
-    embedding_binding_host: str = "http://localhost:11434"
+    embedding_binding_host: str = "https://api.siliconflow.cn/v1"
     
     # 文件上传配置
     upload_dir: str = str(BASE_DIR / "uploads")
@@ -88,5 +91,40 @@ class Settings(BaseSettings):
         env_file = str(Path(__file__).resolve().parent.parent / ".env")
         case_sensitive = False
         extra = "ignore"
+
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        data = {
+            "timestamp": datetime.utcnow().isoformat(timespec="milliseconds") + "Z",
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        for key, value in record.__dict__.items():
+            if key in ("args", "msg", "levelname", "levelno", "name", "pathname", "filename",
+                       "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
+                       "created", "msecs", "relativeCreated", "thread", "threadName",
+                       "process", "processName"):
+                continue
+            if key not in data:
+                data[key] = value
+        return json.dumps(data, ensure_ascii=False)
+
+
+def get_logger(name: str) -> logging.Logger:
+    logger = logging.getLogger(name)
+    if logger.handlers:
+        return logger
+    logs_dir = BASE_DIR / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    file_path = logs_dir / "app.log"
+    file_handler = logging.FileHandler(str(file_path), encoding="utf-8")
+    file_handler.setFormatter(JsonFormatter())
+    logger.addHandler(file_handler)
+    logger.setLevel(logging.DEBUG if Settings().debug else logging.INFO)
+    logger.propagate = False
+    return logger
+
 
 settings = Settings()

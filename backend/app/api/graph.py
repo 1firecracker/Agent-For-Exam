@@ -7,8 +7,10 @@ from pydantic import BaseModel
 
 from app.services.graph_service import GraphService
 from app.services.memory_service import MemoryService
+from app.config import get_logger
 
 router = APIRouter(tags=["graph"])
+logger = get_logger("app.graph")
 
 # 请求/响应模型
 class QueryRequest(BaseModel):
@@ -240,10 +242,17 @@ async def query_knowledge_graph(conversation_id: str, request: QueryRequest):
         memory_service = MemoryService()
         history = memory_service.get_recent_history(conversation_id, max_turns=3, max_tokens_per_message=500)
         token_stats = memory_service.calculate_input_tokens(request.query, history, request.mode)
-        print(f"[Token统计] 模式={token_stats['mode']}, 查询={token_stats['query_tokens']}, "
-              f"历史={token_stats['history_tokens']} (保留{token_stats['history_count']}条: "
-              f"用户{token_stats['history_user_count']}条+助手{token_stats['history_assistant_count']}条), "
-              f"总计={token_stats['total_input_tokens']}")
+        logger.debug(
+            "知识图谱查询 token 统计",
+            extra={
+                "event": "graph.token_stats",
+                "conversation_id": conversation_id,
+                "mode": token_stats.get("mode"),
+                "query_tokens": token_stats.get("query_tokens"),
+                "history_tokens": token_stats.get("history_tokens"),
+                "total_input_tokens": token_stats.get("total_input_tokens"),
+            },
+        )
         
         result = await service.query(conversation_id, request.query, request.mode)
         
@@ -287,12 +296,19 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
     # 获取历史对话（减少到3轮，并限制单条消息长度）
     history = memory_service.get_recent_history(conversation_id, max_turns=3, max_tokens_per_message=500)
     
-    # 计算并打印输入 token
+    # 计算输入 token
     token_stats = memory_service.calculate_input_tokens(request.query, history, request.mode)
-    print(f"[Token统计] 模式={token_stats['mode']}, 查询={token_stats['query_tokens']}, "
-          f"历史={token_stats['history_tokens']} (保留{token_stats['history_count']}条: "
-          f"用户{token_stats['history_user_count']}条+助手{token_stats['history_assistant_count']}条), "
-          f"总计={token_stats['total_input_tokens']}")
+    logger.debug(
+        "知识图谱流式查询 token 统计",
+        extra={
+            "event": "graph.token_stats_stream",
+            "conversation_id": conversation_id,
+            "mode": token_stats.get("mode"),
+            "query_tokens": token_stats.get("query_tokens"),
+            "history_tokens": token_stats.get("history_tokens"),
+            "total_input_tokens": token_stats.get("total_input_tokens"),
+        },
+    )
     
     # 检查是否是 Agent 模式
     if request.mode == "agent":
@@ -316,6 +332,8 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
                         yield f"{json.dumps({'tool_result': chunk})}\n"
                     elif chunk["type"] == "tool_error":
                         yield f"{json.dumps({'tool_error': chunk})}\n"
+                    elif chunk["type"] == "tool_progress":
+                        yield f"{json.dumps({'tool_progress': chunk})}\n"
                     elif chunk["type"] == "mindmap_content":
                         yield f"{json.dumps({'mindmap_content': chunk['content']})}\n"
                     elif chunk["type"] == "response":

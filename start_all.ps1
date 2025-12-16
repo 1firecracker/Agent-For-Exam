@@ -12,7 +12,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # Start backend server
 Write-Host "Starting backend server..." -ForegroundColor Yellow
 $BackendPath = Join-Path $ScriptDir "backend"
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$BackendPath'; .\venv\Scripts\Activate.ps1; uvicorn app.main:app --reload --host 127.0.0.1 --port 8000" -WindowStyle Normal
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$BackendPath'; .\venv\Scripts\Activate.ps1; uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --no-access-log" -WindowStyle Normal
 
 # Wait for backend to start
 Start-Sleep -Seconds 2

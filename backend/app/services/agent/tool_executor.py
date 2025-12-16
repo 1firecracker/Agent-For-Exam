@@ -34,6 +34,9 @@ import time
 import asyncio
 from typing import Dict, Any, List, Optional
 from app.services.agent.tool_registry import ToolRegistry, ToolDefinition
+from app.config import get_logger
+
+logger = get_logger("app.tool_executor")
 
 
 class ToolExecutor:
@@ -92,8 +95,15 @@ class ToolExecutor:
         
         # 5. 执行工具
         try:
-            
-            print(f"🔧 执行工具: {tool_name}, 参数: {parameters}")
+            logger.info(
+                "开始执行工具",
+                extra={
+                    "event": "tool.execute_start",
+                    "tool_name": tool_name,
+                    "conversation_id": conversation_id,
+                    "parameters": parameters,
+                },
+            )
             
             # 调用工具处理函数
             if asyncio.iscoroutinefunction(tool.handler):
@@ -109,7 +119,14 @@ class ToolExecutor:
                 "timestamp": time.time()
             })
             
-            print(f"✅ 工具执行成功: {tool_name}")
+            logger.info(
+                "工具执行成功",
+                extra={
+                    "event": "tool.execute_success",
+                    "tool_name": tool_name,
+                    "conversation_id": conversation_id,
+                },
+            )
             
             return {
                 "status": "success",
@@ -119,12 +136,157 @@ class ToolExecutor:
         
         except Exception as e:
             error_msg = f"工具执行失败: {str(e)}"
-            print(f"❌ {error_msg}")
+            logger.error(
+                error_msg,
+                extra={
+                    "event": "tool.execute_failed",
+                    "tool_name": tool_name,
+                    "conversation_id": conversation_id,
+                },
+            )
             return {
                 "status": "error",
                 "message": error_msg,
                 "tool_name": tool_name,
                 "error": str(e)
+            }
+    
+    def is_generator_tool(self, tool_name: str) -> bool:
+        """检查工具是否为生成器工具"""
+        tool = self.registry.get_tool(tool_name)
+        if not tool:
+            return False
+        import inspect
+        return inspect.isasyncgenfunction(tool.handler)
+    
+    async def execute_generator(
+        self,
+        tool_name: str,
+        parameters: Dict[str, Any],
+        conversation_id: str
+    ):
+        """执行生成器工具（用于支持进度更新）
+        
+        Yields:
+            - {"type": "tool_progress", "tool_name": str, "progress": dict} - 进度更新
+            - {"type": "tool_result", "tool_name": str, "result": dict} - 最终结果
+        """
+        # 1. 获取工具定义
+        tool = self.registry.get_tool(tool_name)
+        if not tool:
+            yield {
+                "type": "tool_result",
+                "tool_name": tool_name,
+                "result": {
+                    "status": "error",
+                    "message": f"工具 {tool_name} 不存在"
+                }
+            }
+            return
+        
+        # 2. 注入 conversation_id
+        if "conversation_id" not in parameters:
+            parameters["conversation_id"] = conversation_id
+        
+        # 3. 验证参数
+        validation_result = self._validate_parameters(tool, parameters)
+        if not validation_result["valid"]:
+            yield {
+                "type": "tool_result",
+                "tool_name": tool_name,
+                "result": {
+                    "status": "error",
+                    "message": f"参数验证失败: {validation_result['error']}"
+                }
+            }
+            return
+        
+        # 4. 检查速率限制
+        if not self._check_rate_limit(tool):
+            yield {
+                "type": "tool_result",
+                "tool_name": tool_name,
+                "result": {
+                    "status": "error",
+                    "message": "工具调用频率过高，请稍后再试"
+                }
+            }
+            return
+        
+        # 5. 执行生成器工具
+        try:
+            logger.info(
+                "开始执行生成器工具",
+                extra={
+                    "event": "tool.execute_generator_start",
+                    "tool_name": tool_name,
+                    "conversation_id": conversation_id,
+                    "parameters": parameters,
+                },
+            )
+            
+            result = None
+            async for item in tool.handler(**parameters):
+                if isinstance(item, dict) and item.get("type") == "tool_progress":
+                    # 进度更新
+                    yield {
+                        "type": "tool_progress",
+                        "tool_name": tool_name,
+                        "progress": item.get("progress")
+                    }
+                elif isinstance(item, dict) and ("status" in item or "message" in item):
+                    # 最终结果
+                    result = item
+                    break
+                else:
+                    # 其他情况，作为最终结果
+                    result = item
+            
+            # 如果没有收到结果，使用默认值
+            if result is None:
+                result = {"status": "success", "message": "工具执行完成"}
+            
+            # 记录执行历史
+            self.execution_history.append({
+                "tool_name": tool_name,
+                "parameters": parameters,
+                "result": result,
+                "timestamp": time.time()
+            })
+            
+            logger.info(
+                "生成器工具执行成功",
+                extra={
+                    "event": "tool.execute_generator_success",
+                    "tool_name": tool_name,
+                    "conversation_id": conversation_id,
+                },
+            )
+            
+            yield {
+                "type": "tool_result",
+                "tool_name": tool_name,
+                "result": result
+            }
+        
+        except Exception as e:
+            error_msg = f"工具执行失败: {str(e)}"
+            logger.error(
+                error_msg,
+                extra={
+                    "event": "tool.execute_generator_failed",
+                    "tool_name": tool_name,
+                    "conversation_id": conversation_id,
+                },
+            )
+            yield {
+                "type": "tool_result",
+                "tool_name": tool_name,
+                "result": {
+                    "status": "error",
+                    "message": error_msg,
+                    "error": str(e)
+                }
             }
     
     def _validate_parameters(self, tool: ToolDefinition, parameters: Dict) -> Dict[str, Any]:

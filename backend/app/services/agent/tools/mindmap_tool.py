@@ -36,12 +36,15 @@ from app.services.agent.tool_registry import ToolDefinition, ToolParameter
 from app.services.mindmap_service import MindMapService
 from app.services.document_service import DocumentService
 from app.services.conversation_service import ConversationService
+from app.config import get_logger
+
+logger = get_logger("app.mindmap_tool")
 
 
 async def generate_mindmap_handler(
     conversation_id: str,
     document_ids: Optional[List[str]] = None
-) -> Dict[str, Any]:
+):
     """生成思维脑图的工具处理函数
     
     Args:
@@ -64,19 +67,21 @@ async def generate_mindmap_handler(
         all_documents = doc_service.list_documents(conversation_id)
         
         if not all_documents:
-            return {
+            yield {
                 "status": "error",
                 "message": "对话中没有文档，无法生成思维脑图"
             }
+            return
         
         # 如果指定了文档ID，只处理这些文档
         if document_ids:
             documents = [doc for doc in all_documents if doc["file_id"] in document_ids]
             if not documents:
-                return {
+                yield {
                     "status": "error",
                     "message": f"指定的文档ID不存在: {document_ids}"
                 }
+                return
         else:
             documents = all_documents
         
@@ -94,15 +99,23 @@ async def generate_mindmap_handler(
                     })
         
         if not doc_list:
-            return {
+            yield {
                 "status": "error",
                 "message": "没有可用的文档内容"
             }
+            return
         
         # 按文件名排序（确保生成顺序一致）
         doc_list.sort(key=lambda x: x["filename"])
         total_docs = len(doc_list)
-        print(f"📋 [思维脑图] 准备生成思维脑图，共 {total_docs} 个文档（已按文件名排序）")
+        logger.info(
+            "准备生成思维脑图",
+            extra={
+                "event": "mindmap.batch_start",
+                "conversation_id": conversation_id,
+                "total_docs": total_docs,
+            },
+        )
 
         # 每次新的思维脑图生成请求，先清空当前对话的脑图文件，再重新逐个追加
         mindmap_service.reset_mindmap(conversation_id)
@@ -116,25 +129,113 @@ async def generate_mindmap_handler(
             doc_text = doc_info["text"]
             document_filenames.append(doc_filename)
             
-            # 显示进度
-            print(f"🔄 [思维脑图] 正在处理第 {i}/{total_docs} 个文档: {doc_filename}")
+            # 发送进度更新
+            yield {
+                "type": "tool_progress",
+                "progress": {
+                    "current": i,
+                    "total": total_docs,
+                    "message": f"正在处理第 {i}/{total_docs} 个文档: {doc_filename}",
+                    "percentage": int((i / total_docs) * 100)
+                }
+            }
+            
+            logger.debug(
+                "处理单个文档的思维脑图",
+                extra={
+                    "event": "mindmap.doc_processing",
+                    "conversation_id": conversation_id,
+                    "doc_index": i,
+                    "total_docs": total_docs,
+                    "document_id": doc_info.get("file_id"),
+                    "document_filename": doc_filename,
+                },
+            )
             
             # 所有文档都只生成当前文档的脑图，不合并已有脑图
             # 合并通过 _save_mindmap 的文件级追加实现
             accumulated_content = ""
-            async for chunk in mindmap_service.generate_mindmap_stream(
-                conversation_id,
-                doc_text,
-                conversation_title,
-                doc_filename,
-                document_id=doc_info.get("file_id"),
-                merge_existing=False
-            ):
-                accumulated_content += chunk
-            
-            print(f"✅ [思维脑图] 已完成第 {i}/{total_docs} 个文档: {doc_filename}")
+            try:
+                async for chunk in mindmap_service.generate_mindmap_stream(
+                    conversation_id,
+                    doc_text,
+                    conversation_title,
+                    doc_filename,
+                    document_id=doc_info.get("file_id"),
+                    merge_existing=False
+                ):
+                    accumulated_content += chunk
+                
+                logger.info(
+                    "单个文档思维脑图生成完成",
+                    extra={
+                        "event": "mindmap.doc_success",
+                        "conversation_id": conversation_id,
+                        "doc_index": i,
+                        "total_docs": total_docs,
+                        "document_id": doc_info.get("file_id"),
+                        "document_filename": doc_filename,
+                    },
+                )
+            except Exception as e:
+                # 单个文档生成失败，记录错误但继续处理其他文档
+                error_msg = f"处理文档 {doc_filename} 时出错: {str(e)}"
+                logger.warning(
+                    "单个文档思维脑图生成失败",
+                    extra={
+                        "event": "mindmap.doc_failed",
+                        "conversation_id": conversation_id,
+                        "document_id": doc_info.get("file_id"),
+                        "document_filename": doc_filename,
+                        "error_message": str(e),
+                    },
+                )
+                # 发送进度更新，显示错误
+                yield {
+                    "type": "tool_progress",
+                    "progress": {
+                        "current": i,
+                        "total": total_docs,
+                        "message": f"⚠️ {error_msg}",
+                        "percentage": int((i / total_docs) * 100)
+                    }
+                }
+                # 如果 accumulated_content 有内容，尝试保存（可能部分成功）
+                if accumulated_content:
+                    try:
+                        mindmap_content = mindmap_service._extract_mindmap_content(accumulated_content)
+                        if mindmap_content:
+                            mindmap_service._save_mindmap(conversation_id, mindmap_content)
+                            logger.info(
+                                "已保存部分思维脑图内容",
+                                extra={
+                                    "event": "mindmap.partial_saved",
+                                    "conversation_id": conversation_id,
+                                    "document_id": doc_info.get("file_id"),
+                                    "document_filename": doc_filename,
+                                },
+                            )
+                    except Exception as save_error:
+                        logger.warning(
+                            "保存部分思维脑图内容失败",
+                            extra={
+                                "event": "mindmap.partial_save_failed",
+                                "conversation_id": conversation_id,
+                                "document_id": doc_info.get("file_id"),
+                                "document_filename": doc_filename,
+                                "error_message": str(save_error),
+                            },
+                        )
+                # 继续处理下一个文档，不中断整个流程
         
-        print(f"🎉 [思维脑图] 所有文档处理完成，共 {total_docs} 个文档")
+        logger.info(
+            "所有文档思维脑图处理完成",
+            extra={
+                "event": "mindmap.batch_done",
+                "conversation_id": conversation_id,
+                "total_docs": total_docs,
+            },
+        )
         
         # 提取最终保存的思维脑图内容
         from pathlib import Path
@@ -150,7 +251,7 @@ async def generate_mindmap_handler(
             mindmap_content = mindmap_service._extract_mindmap_content(accumulated_content) if accumulated_content else None
         
         if mindmap_content:
-            return {
+            yield {
                 "status": "success",
                 "message": f"思维脑图已生成（基于 {len(doc_list)} 个文档，逐个生成并合并）",
                 "mindmap_content": mindmap_content,
@@ -158,13 +259,13 @@ async def generate_mindmap_handler(
                 "document_names": document_filenames
             }
         else:
-            return {
+            yield {
                 "status": "error",
                 "message": "思维脑图生成失败，无法提取有效内容"
             }
     
     except Exception as e:
-        return {
+        yield {
             "status": "error",
             "message": f"生成思维脑图时出错: {str(e)}",
             "error": str(e)

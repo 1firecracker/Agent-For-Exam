@@ -174,7 +174,7 @@ class LightRAGService:
         支持:
         - ollama: Ollama 本地模型
         - openai: OpenAI API 或兼容 OpenAI API 的服务
-        - siliconcloud: 硅基流动 Embedding API
+        - siliconflow: 硅基流动 Embedding API（使用 OpenAI 兼容接口）
         """
         if config.settings.embedding_binding == "ollama":
             from lightrag.llm.ollama import ollama_embed
@@ -207,26 +207,38 @@ class LightRAGService:
                     base_url=config.settings.llm_binding_host,
                 )
             )
-        elif config.settings.embedding_binding == "siliconcloud":
-            from lightrag.llm.siliconcloud import siliconcloud_embedding
+        elif config.settings.embedding_binding == "siliconflow":
+            # 统一使用 siliconflow，使用 openai_embed（硅基流动是 OpenAI 兼容的）
+            from lightrag.llm.openai import openai_embed
+            from app.services.config_service import config_service
             
-            api_key = config.settings.llm_binding_api_key
+            # 从配置服务读取 embedding 配置（优先使用配置服务的配置）
+            embedding_config = config_service.get_config("embedding")
+            
+            # 使用配置服务的 API Key，如果没有则使用全局的（向后兼容）
+            api_key = embedding_config.get("api_key") or config.settings.llm_binding_api_key
             if not api_key:
-                raise ValueError("LLM_BINDING_API_KEY 未配置（硅基流动需要）")
+                raise ValueError("Embedding API Key 未配置（硅基流动需要）")
             
-            # 硅基流动 Embedding API 地址
-            embedding_base_url = config.settings.llm_binding_host.replace("/v1", "/v1/embeddings")
-            if not embedding_base_url.endswith("/v1/embeddings"):
-                embedding_base_url = "https://api.siliconflow.cn/v1/embeddings"
+            # 使用配置服务的模型和 host
+            embedding_model = embedding_config.get("model") or config.settings.embedding_model
+            embedding_host = embedding_config.get("host") or config.settings.llm_binding_host
+            
+            # 确保 host 以 /v1 结尾（openai_embed 会自动添加 /embeddings）
+            if not embedding_host.endswith("/v1"):
+                if embedding_host.endswith("/v1/embeddings"):
+                    embedding_host = embedding_host.replace("/v1/embeddings", "/v1")
+                else:
+                    embedding_host = "https://api.siliconflow.cn/v1"
             
             return EmbeddingFunc(
                 embedding_dim=config.settings.embedding_dim,
                 max_token_size=8192,
-                func=lambda texts: siliconcloud_embedding(
+                func=lambda texts: openai_embed(
                     texts,
-                    model=config.settings.embedding_model,
+                    model=embedding_model,
                     api_key=api_key,
-                    base_url=embedding_base_url,
+                    base_url=embedding_host,
                 )
             )
         else:

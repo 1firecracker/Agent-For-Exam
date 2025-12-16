@@ -10,6 +10,8 @@ import app.config as config
 from app.utils.document_parser import DocumentParser
 from app.services.conversation_service import ConversationService
 
+logger = config.get_logger("app.mindmap")
+
 
 class MindMapService:
     """思维脑图服务"""
@@ -28,7 +30,14 @@ class MindMapService:
         mindmap_file = self._get_mindmap_file(conversation_id)
         if mindmap_file.exists():
             mindmap_file.write_text("", encoding="utf-8")
-            print(f"[🧹 思维脑图已清空] {mindmap_file}")
+            logger.info(
+                "思维脑图已清空",
+                extra={
+                    "event": "mindmap.reset_success",
+                    "conversation_id": conversation_id,
+                    "mindmap_path": str(mindmap_file),
+                },
+            )
     
     def _load_existing_mindmap(self, conversation_id: str) -> Optional[str]:
         """加载已有的思维脑图"""
@@ -37,7 +46,15 @@ class MindMapService:
             try:
                 return mindmap_file.read_text(encoding="utf-8")
             except Exception as e:
-                print(f"[⚠️ 加载已有脑图失败] {e}")
+                logger.warning(
+                    "加载已有思维脑图失败",
+                    extra={
+                        "event": "mindmap.load_failed",
+                        "conversation_id": conversation_id,
+                        "mindmap_path": str(mindmap_file),
+                        "error_message": str(e),
+                    },
+                )
         return None
     
     def _save_mindmap(self, conversation_id: str, mindmap_content: str):
@@ -57,7 +74,14 @@ class MindMapService:
             combined_content = mindmap_content
 
         mindmap_file.write_text(combined_content, encoding="utf-8")
-        print(f"[✅ 思维脑图已保存] {mindmap_file}")
+        logger.info(
+            "思维脑图已保存",
+            extra={
+                "event": "mindmap.save_success",
+                "conversation_id": conversation_id,
+                "mindmap_path": str(mindmap_file),
+            },
+        )
     
     def _extract_last_document_block(self, full_mindmap: str) -> Optional[str]:
         """从完整脑图内容中提取最后一个文档块（最后一个以 ## 开头的部分）"""
@@ -234,7 +258,15 @@ class MindMapService:
         """
         # 方案A：LLM只处理当前文档，不再合并已有脑图
         # 已有脑图通过文件级追加保存（_save_mindmap）实现合并
-        print(f"📝 [思维脑图] 生成当前文档的思维脑图: {document_filename}")
+        logger.info(
+            "生成当前文档的思维脑图",
+            extra={
+                "event": "mindmap.generate_start",
+                "conversation_id": conversation_id,
+                "document_id": document_id,
+                "document_filename": document_filename,
+            },
+        )
 
         # 从已有脑图中提取上一份文档的脑图作为示例（仅用于模仿格式，不参与内容合并）
         existing_full = self._load_existing_mindmap(conversation_id)
@@ -280,55 +312,115 @@ class MindMapService:
             ],
             "stream": True,
             "temperature": 0.3,  # 降低温度，提高格式一致性
-            "max_tokens": 4000
+            "max_tokens": 10000  # 增加 max_tokens 以支持大型文档
         }
         
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(api_url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=config.settings.timeout)) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise Exception(f"LLM API 错误: {response.status}, {error_text}")
-                    
-                    accumulated_content = ""
-                    async for line in response.content:
-                        if not line:
-                            continue
+        # 超时重试机制：默认400秒，超时后每次重试时间翻倍，最多重试3次
+        base_timeout = config.settings.timeout  # 400秒
+        max_retries = 3
+        retry_count = 0
+        current_timeout = base_timeout
+        
+        while retry_count <= max_retries:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        api_url, 
+                        headers=headers, 
+                        json=payload, 
+                        timeout=aiohttp.ClientTimeout(total=current_timeout)
+                    ) as response:
+                        if response.status != 200:
+                            error_text = await response.text()
+                            raise Exception(f"LLM API 错误: {response.status}, {error_text}")
                         
-                        line_text = line.decode('utf-8')
-                        for chunk in line_text.split('\n'):
-                            if not chunk.strip() or chunk.startswith(':'):
+                        accumulated_content = ""
+                        async for line in response.content:
+                            if not line:
                                 continue
                             
-                            if chunk.startswith('data: '):
-                                chunk = chunk[6:]  # 移除 'data: ' 前缀
-                            
-                            if chunk.strip() == '[DONE]':
-                                # 流式输出结束，保存完整脑图
-                                if accumulated_content:
-                                    # 提取 mindmap 代码块内容
-                                    mindmap_content = self._extract_mindmap_content(accumulated_content)
-                                    if mindmap_content:
-                                        self._save_mindmap(conversation_id, mindmap_content)
-                                return
-                            
-                            try:
-                                data = json.loads(chunk)
-                                if 'choices' in data and len(data['choices']) > 0:
-                                    delta = data['choices'][0].get('delta', {})
-                                    content = delta.get('content', '')
-                                    if content:
-                                        accumulated_content += content
-                                        # 实时流式输出，不等待保存
-                                        yield content
-                            except json.JSONDecodeError:
-                                continue
-                            
-                            # 注意：不在流式过程中保存，只在流式结束时保存完整内容
-                            # 这样可以确保前端能够实时接收和渲染内容
-        except Exception as e:
-            print(f"[❌ 思维脑图生成失败] {e}")
-            raise
+                            line_text = line.decode('utf-8')
+                            for chunk in line_text.split('\n'):
+                                if not chunk.strip() or chunk.startswith(':'):
+                                    continue
+                                
+                                if chunk.startswith('data: '):
+                                    chunk = chunk[6:]  # 移除 'data: ' 前缀
+                                
+                                if chunk.strip() == '[DONE]':
+                                    # 流式输出结束，保存完整脑图
+                                    if accumulated_content:
+                                        # 提取 mindmap 代码块内容
+                                        mindmap_content = self._extract_mindmap_content(accumulated_content)
+                                        if mindmap_content:
+                                            self._save_mindmap(conversation_id, mindmap_content)
+                                    return
+                                
+                                try:
+                                    data = json.loads(chunk)
+                                    if 'choices' in data and len(data['choices']) > 0:
+                                        delta = data['choices'][0].get('delta', {})
+                                        content = delta.get('content', '')
+                                        if content:
+                                            accumulated_content += content
+                                            # 实时流式输出，不等待保存
+                                            yield content
+                                except json.JSONDecodeError:
+                                    continue
+                                
+                                # 注意：不在流式过程中保存，只在流式结束时保存完整内容
+                                # 这样可以确保前端能够实时接收和渲染内容
+                
+                # 成功完成，退出重试循环
+                break
+                
+            except asyncio.TimeoutError:
+                retry_count += 1
+                if retry_count > max_retries:
+                    # 达到最大重试次数，抛出异常
+                    error_msg = f"思维脑图生成超时，已重试 {max_retries} 次（超时时间: {current_timeout}秒）"
+                    logger.error(
+                        error_msg,
+                        extra={
+                            "event": "mindmap.llm_timeout_exceeded",
+                            "conversation_id": conversation_id,
+                            "document_id": document_id,
+                            "timeout_sec": current_timeout,
+                            "max_retries": max_retries,
+                        },
+                    )
+                    raise Exception(error_msg)
+                else:
+                    # 超时时间翻倍，继续重试
+                    current_timeout = base_timeout * (2 ** retry_count)
+                    logger.warning(
+                        "思维脑图生成超时，准备重试",
+                        extra={
+                            "event": "mindmap.llm_timeout_retry",
+                            "conversation_id": conversation_id,
+                            "document_id": document_id,
+                            "retry_count": retry_count,
+                            "timeout_sec": current_timeout,
+                        },
+                    )
+                    # 继续下一次重试
+                    continue
+                    
+            except Exception as e:
+                # 非超时错误，直接抛出
+                import traceback
+                error_detail = traceback.format_exc()
+                logger.error(
+                    "思维脑图生成失败",
+                    extra={
+                        "event": "mindmap.llm_failed",
+                        "conversation_id": conversation_id,
+                        "document_id": document_id,
+                        "error_message": str(e),
+                        "stack_trace": error_detail,
+                    },
+                )
+                raise
     
     def _extract_mindmap_content(self, text: str) -> Optional[str]:
         """从文本中提取 mindmap 代码块内容"""
@@ -369,6 +461,14 @@ class MindMapService:
                 mindmap_file.unlink()
                 return True
             except Exception as e:
-                print(f"[⚠️ 删除思维脑图失败] {e}")
+                logger.warning(
+                    "删除思维脑图失败",
+                    extra={
+                        "event": "mindmap.delete_failed",
+                        "conversation_id": conversation_id,
+                        "mindmap_path": str(mindmap_file),
+                        "error_message": str(e),
+                    },
+                )
         return False
 

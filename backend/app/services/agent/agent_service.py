@@ -42,6 +42,8 @@ from app.services.memory_service import MemoryService
 import app.config as config
 import aiohttp
 
+logger = config.get_logger("app.agent")
+
 
 class AgentService:
     """Agent 核心服务"""
@@ -56,7 +58,13 @@ class AgentService:
         self.tool_registry.register(MINDMAP_TOOL)
         self.tool_registry.register(QUERY_TOOL)
         self.tool_registry.register(LIST_DOCUMENTS_TOOL)
-        print(f"📦 Agent 服务初始化完成，已注册 {len(self.tool_registry.tools)} 个工具")
+        logger.info(
+            "Agent 服务初始化完成",
+            extra={
+                "event": "agent.init",
+                "tool_count": len(self.tool_registry.tools),
+            },
+        )
     
     def _build_agent_system_prompt(self) -> str:
         """构建 Agent 系统提示词"""
@@ -179,8 +187,16 @@ class AgentService:
         
         while round_count < max_rounds:
             round_count += 1
-            print(f"🔄 [Agent] 第 {round_count} 轮工具调用（最大 {max_rounds} 轮）")
-            print(f"📨 [Agent] 当前消息列表长度: {len(current_messages)}")
+            logger.info(
+                "开始新一轮工具调用",
+                extra={
+                    "event": "agent.round_start",
+                    "conversation_id": conversation_id,
+                    "round": round_count,
+                    "max_rounds": max_rounds,
+                    "message_count": len(current_messages),
+                },
+            )
             
             # 调用 LLM（支持 Function Calling）
             tool_calls_buffer = []
@@ -207,25 +223,45 @@ class AgentService:
     
             # 如果没有工具调用，生成最终回答并退出
             if not has_tool_calls or not tool_calls_buffer:
-                print(f"✅ [Agent] 没有更多工具调用，生成最终回答")
+                logger.info(
+                    "没有更多工具调用，直接生成最终回答",
+                    extra={
+                        "event": "agent.no_more_tools",
+                        "conversation_id": conversation_id,
+                        "round": round_count,
+                    },
+                )
                 # 如果 LLM 已经生成了文本内容，说明它已经回答了，不需要继续
                 if accumulated_content:
-                    print(f"💬 [Agent] LLM 已生成文本回答: {accumulated_content[:100]}...")
+                    logger.debug(
+                        "LLM 已生成文本回答",
+                        extra={
+                            "event": "agent.llm_answer_preview",
+                            "conversation_id": conversation_id,
+                            "preview": accumulated_content[:100],
+                        },
+                    )
                 break
             
             # 执行工具
-            print(f"🔧 [Agent] 执行 {len(tool_calls_buffer)} 个工具调用")
+            logger.info(
+                "执行本轮工具调用",
+                extra={
+                    "event": "agent.tools_execution_start",
+                    "conversation_id": conversation_id,
+                    "round": round_count,
+                    "tool_call_count": len(tool_calls_buffer),
+                },
+            )
             
-            # 调试：打印 tool_calls_buffer 的原始内容
-            print(f"🔍 [Agent] tool_calls_buffer 原始内容:")
-            for i, tc in enumerate(tool_calls_buffer):
-                print(f"  tool_call[{i}]: {tc}")
-                if isinstance(tc, dict):
-                    print(f"    id={tc.get('id')}, id类型={type(tc.get('id')).__name__}")
-                    print(f"    type={tc.get('type')}, type类型={type(tc.get('type')).__name__}")
-                    func = tc.get('function', {})
-                    print(f"    function.name={func.get('name')}, name类型={type(func.get('name')).__name__}")
-                    print(f"    function.arguments={func.get('arguments')[:100] if func.get('arguments') else None}, arguments类型={type(func.get('arguments')).__name__}")
+            logger.debug(
+                "tool_calls_buffer 原始内容",
+                extra={
+                    "event": "agent.tool_calls_buffer",
+                    "conversation_id": conversation_id,
+                    "buffer": tool_calls_buffer,
+                },
+            )
             
             tool_results = []
             
@@ -269,7 +305,14 @@ class AgentService:
                     if not tool_call_id:
                         import time
                         tool_call_id = f"call_{len(validated_tool_calls)}_{int(time.time() * 1000)}"
-                        print(f"⚠️ [Agent] tool_call id 为空，生成临时 id: {tool_call_id}")
+                        logger.debug(
+                            "tool_call id 为空，已生成临时 id",
+                            extra={
+                                "event": "agent.tool_call_id_generated",
+                                "conversation_id": conversation_id,
+                                "generated_id": tool_call_id,
+                            },
+                        )
                     
                     validated_tool_calls.append({
                         "id": tool_call_id,
@@ -280,7 +323,13 @@ class AgentService:
                         }
                     })
                 else:
-                    print(f"⚠️ [Agent] 跳过无效的 tool_call: function_name 为空")
+                    logger.warning(
+                        "跳过无效的 tool_call，function_name 为空",
+                        extra={
+                            "event": "agent.invalid_tool_call",
+                            "conversation_id": conversation_id,
+                        },
+                    )
             
             assistant_message = {
                 "role": "assistant",
@@ -288,10 +337,22 @@ class AgentService:
                 "tool_calls": validated_tool_calls
             }
             current_messages.append(assistant_message)
-            print(f"✅ [Agent] 添加 assistant 消息，包含 {len(validated_tool_calls)} 个工具调用")
-            for i, tc in enumerate(validated_tool_calls):
-                args = tc.get("function", {}).get("arguments", "")
-                print(f"  工具调用[{i}]: id={tc.get('id')}, name={tc.get('function', {}).get('name')}, arguments类型={type(args).__name__}, arguments长度={len(str(args))}")
+            logger.info(
+                "添加 assistant 消息，附带工具调用",
+                extra={
+                    "event": "agent.assistant_with_tools",
+                    "conversation_id": conversation_id,
+                    "tool_call_count": len(validated_tool_calls),
+                },
+            )
+            logger.debug(
+                "assistant tool_calls 详情",
+                extra={
+                    "event": "agent.assistant_tool_calls_detail",
+                    "conversation_id": conversation_id,
+                    "tool_calls": validated_tool_calls,
+                },
+            )
             
             # 执行工具调用，并正确匹配 tool_call_id
             # 注意：tool_call 事件已经在流式解析时 yield 了，这里不需要重复 yield
@@ -313,19 +374,57 @@ class AgentService:
                     if tool_call_index < len(validated_tool_calls):
                         tool_call = validated_tool_calls[tool_call_index]
                         tool_call_id = tool_call.get("id", "")
-                        print(f"🔗 [Agent] 工具调用 ID: {tool_call_id}, 工具名: {result.get('tool_name')}")
+                        logger.debug(
+                            "匹配到工具调用结果",
+                            extra={
+                                "event": "agent.tool_result_matched",
+                                "conversation_id": conversation_id,
+                                "tool_call_id": tool_call_id,
+                                "tool_name": result.get("tool_name"),
+                            },
+                        )
                     else:
-                        print(f"⚠️ [Agent] 警告: tool_call_index ({tool_call_index}) 超出 validated_tool_calls 长度 ({len(validated_tool_calls)})")
+                        logger.warning(
+                            "tool_call_index 超出 validated_tool_calls 长度",
+                            extra={
+                                "event": "agent.tool_call_index_out_of_range",
+                                "conversation_id": conversation_id,
+                                "tool_call_index": tool_call_index,
+                                "validated_count": len(validated_tool_calls),
+                            },
+                        )
                     
                     # 添加 tool 消息到当前消息列表
-                    tool_result_content = self._format_tool_result(result.get("result", {}))
+                    # 统一处理生成器工具和普通工具的结果结构
+                    result_data = result.get("result", {})
+                    # 生成器工具：result_data 直接就是工具 handler 返回的结果（包含 status, message 等）
+                    # 普通工具：result_data 是 tool_executor.execute 返回的结果（包含 status, tool_name, result 嵌套字段）
+                    # _format_tool_result 方法已经能够处理两种格式
+                    tool_result_content = self._format_tool_result(result_data)
+                    
                     tool_message = {
                         "role": "tool",
                         "content": tool_result_content,
                         "tool_call_id": tool_call_id
                     }
                     current_messages.append(tool_message)
-                    print(f"📝 [Agent] 添加 tool 消息到历史，tool_call_id={tool_call_id}, content长度={len(tool_result_content)}")
+                    logger.info(
+                        "添加 tool 消息到历史",
+                        extra={
+                            "event": "agent.tool_message_appended",
+                            "conversation_id": conversation_id,
+                            "tool_call_id": tool_call_id,
+                            "content_length": len(tool_result_content),
+                        },
+                    )
+                    logger.debug(
+                        "工具结果详情",
+                        extra={
+                            "event": "agent.tool_result_detail",
+                            "conversation_id": conversation_id,
+                            "raw_result": result,
+                        },
+                    )
                     tool_call_index += 1
                 elif result["type"] == "tool_error":
                     # 从 validated_tool_calls 中获取对应的 tool_call_id
@@ -340,20 +439,48 @@ class AgentService:
                         "tool_call_id": tool_call_id
                     }
                     current_messages.append(tool_message)
-                    print(f"❌ [Agent] 添加 tool 错误消息到历史，tool_call_id={tool_call_id}")
+                    logger.warning(
+                        "添加 tool 错误消息到历史",
+                        extra={
+                            "event": "agent.tool_error_message_appended",
+                            "conversation_id": conversation_id,
+                            "tool_call_id": tool_call_id,
+                        },
+                    )
                     tool_results.append(result)  # 收集错误结果，确保循环继续
                     tool_call_index += 1
             
             # 如果没有工具结果，退出循环
             if not tool_results:
-                print(f"⚠️ [Agent] 没有工具执行结果，退出循环")
+                logger.warning(
+                    "没有工具执行结果，结束循环",
+                    extra={
+                        "event": "agent.no_tool_results",
+                        "conversation_id": conversation_id,
+                        "round": round_count,
+                    },
+                )
                 break
             
-            print(f"✅ [Agent] 工具执行完成，当前消息列表长度: {len(current_messages)}")
-            print(f"🔄 [Agent] 准备进行下一轮工具调用...")
+            logger.info(
+                "工具执行完成，进入下一轮判断",
+                extra={
+                    "event": "agent.tools_execution_done",
+                    "conversation_id": conversation_id,
+                    "round": round_count,
+                    "message_count": len(current_messages),
+                },
+            )
         
         if round_count >= max_rounds:
-            print(f"⚠️ [Agent] 达到最大工具调用轮次限制 ({max_rounds} 轮)")
+            logger.warning(
+                "达到最大工具调用轮次限制",
+                extra={
+                    "event": "agent.max_rounds_reached",
+                    "conversation_id": conversation_id,
+                    "max_rounds": max_rounds,
+                },
+            )
             yield {
                 "type": "error",
                 "content": f"达到最大工具调用轮次限制 ({max_rounds} 轮)，请简化您的请求"
@@ -381,6 +508,10 @@ class AgentService:
         llm_messages = [
             {"role": "system", "content": system_prompt}
         ]
+        
+        # 打印发送给 LLM 的完整消息列表（调试用）
+        print(f"📤 [Agent] 准备发送给 LLM 的消息列表:")
+        print(f"  [0] system: content长度={len(system_prompt)}")
         
         # 添加消息（确保所有 content 都是字符串）
         for msg in messages:
@@ -468,6 +599,34 @@ class AgentService:
                         print(f"⚠️ [Agent] assistant 消息的 tool_calls 验证后全部无效，已移除")
             
             llm_messages.append(cleaned_msg)
+            
+            # 打印每条消息的详细信息
+            role = cleaned_msg.get("role", "unknown")
+            content_preview = str(cleaned_msg.get("content", ""))[:150] if cleaned_msg.get("content") else ""
+            tool_calls_info = ""
+            if role == "assistant" and cleaned_msg.get("tool_calls"):
+                tool_calls_info = f", tool_calls数量={len(cleaned_msg.get('tool_calls', []))}"
+                for i, tc in enumerate(cleaned_msg.get('tool_calls', [])):
+                    tc_name = tc.get('function', {}).get('name', 'unknown')
+                    tc_id = tc.get('id', '')
+                    tool_calls_info += f", tool_call[{i}]={tc_name}(id={tc_id})"
+            elif role == "tool":
+                tool_calls_info = f", tool_call_id={cleaned_msg.get('tool_call_id', '')}"
+            print(f"  [{len(llm_messages)}] {role}: content长度={len(str(cleaned_msg.get('content', '')))}{tool_calls_info}")
+            if content_preview:
+                print(f"      content预览: {content_preview}...")
+        
+        # 打印完整的消息列表 JSON（用于调试）
+        print(f"📤 [Agent] 完整消息列表 JSON（前3条和后3条）:")
+        total_msgs = len(llm_messages)
+        for i in range(min(3, total_msgs)):
+            msg = llm_messages[i]
+            print(f"  [{i}] {json.dumps({k: (str(v)[:100] + '...' if isinstance(v, str) and len(str(v)) > 100 else v) for k, v in msg.items()}, ensure_ascii=False)}")
+        if total_msgs > 6:
+            print(f"  ... (省略 {total_msgs - 6} 条消息) ...")
+        for i in range(max(3, total_msgs - 3), total_msgs):
+            msg = llm_messages[i]
+            print(f"  [{i}] {json.dumps({k: (str(v)[:100] + '...' if isinstance(v, str) and len(str(v)) > 100 else v) for k, v in msg.items()}, ensure_ascii=False)}")
         
         # 使用聊天场景的配置
         from app.services.config_service import config_service
@@ -1035,13 +1194,24 @@ class AgentService:
         """格式化工具执行结果为字符串，用于发送回 LLM
         
         Args:
-            result_data: 工具执行结果（从 tool_executor.execute 返回的格式）
+            result_data: 工具执行结果
+                - 生成器工具：直接是工具 handler 返回的结果（包含 status, message, mindmap_content 等）
+                - 普通工具：是 tool_executor.execute 返回的结果（包含 status, tool_name, result 嵌套字段）
             
         Returns:
             格式化的字符串结果
         """
         status = result_data.get("status", "unknown")
-        tool_result = result_data.get("result", {})  # 这是工具 handler 返回的原始结果
+        
+        # 判断是生成器工具还是普通工具的结果结构
+        # 生成器工具：result_data 直接包含 message, mindmap_content 等字段
+        # 普通工具：result_data 包含嵌套的 result 字段
+        if "result" in result_data and isinstance(result_data.get("result"), dict):
+            # 普通工具：提取嵌套的 result 字段
+            tool_result = result_data.get("result", {})
+        else:
+            # 生成器工具：result_data 本身就是工具 handler 返回的结果
+            tool_result = result_data
         
         if status == "success":
             # 成功时，提取关键信息
@@ -1062,7 +1232,7 @@ class AgentService:
                         formatted += f"\n\n结果：{str(result_content)}"
                 elif mindmap_content:
                     # 思维脑图内容（不完整显示，只提示）
-                    formatted += f"\n\n思维脑图已生成，内容已保存。"
+                    formatted += f"\n\n思维脑图已生成，内容已保存。任务已完成，无需再次调用此工具。"
                 
                 return formatted
             else:
@@ -1070,8 +1240,8 @@ class AgentService:
         
         elif status == "error":
             # 失败时，返回错误信息
-            error_msg = result_data.get("message", "执行失败")
-            error_detail = result_data.get("error", "")
+            error_msg = result_data.get("message") or tool_result.get("message", "执行失败")
+            error_detail = result_data.get("error") or tool_result.get("error", "")
             if error_detail:
                 return f"执行失败：{error_msg}\n错误详情：{error_detail}"
             return f"执行失败：{error_msg}"
@@ -1108,27 +1278,56 @@ class AgentService:
                 }
                 continue
             
-            # 执行工具
-            result = await self.tool_executor.execute(
-                tool_name,
-                arguments,
-                conversation_id
-            )
-            
-            # 返回工具执行结果（包含参数信息，供前端显示）
-            yield {
-                "type": "tool_result",
-                "tool_name": tool_name,
-                "arguments": arguments,  # 添加参数信息
-                "result": result
-            }
-            
-            # 如果是思维脑图工具，还需要流式返回思维脑图内容
-            if tool_name == "generate_mindmap" and result.get("status") == "success":
-                mindmap_content = result.get("result", {}).get("mindmap_content")
-                if mindmap_content:
-                    yield {
-                        "type": "mindmap_content",
-                        "content": mindmap_content
-                    }
+            # 执行工具（检查是否为生成器工具）
+            if self.tool_executor.is_generator_tool(tool_name):
+                # 生成器工具：迭代处理，可能 yield 进度更新
+                async for item in self.tool_executor.execute_generator(
+                    tool_name,
+                    arguments,
+                    conversation_id
+                ):
+                    if item["type"] == "tool_progress":
+                        # 进度更新：直接 yield
+                        yield item
+                    elif item["type"] == "tool_result":
+                        # 最终结果：添加参数信息后 yield
+                        yield {
+                            "type": "tool_result",
+                            "tool_name": tool_name,
+                            "arguments": arguments,  # 添加参数信息
+                            "result": item["result"]
+                        }
+                        
+                        # 如果是思维脑图工具，还需要流式返回思维脑图内容
+                        if tool_name == "generate_mindmap" and item["result"].get("status") == "success":
+                            mindmap_content = item["result"].get("mindmap_content")
+                            if mindmap_content:
+                                yield {
+                                    "type": "mindmap_content",
+                                    "content": mindmap_content
+                                }
+            else:
+                # 普通工具：直接执行
+                result = await self.tool_executor.execute(
+                    tool_name,
+                    arguments,
+                    conversation_id
+                )
+                
+                # 返回工具执行结果（包含参数信息，供前端显示）
+                yield {
+                    "type": "tool_result",
+                    "tool_name": tool_name,
+                    "arguments": arguments,  # 添加参数信息
+                    "result": result
+                }
+                
+                # 如果是思维脑图工具，还需要流式返回思维脑图内容
+                if tool_name == "generate_mindmap" and result.get("status") == "success":
+                    mindmap_content = result.get("result", {}).get("mindmap_content")
+                    if mindmap_content:
+                        yield {
+                            "type": "mindmap_content",
+                            "content": mindmap_content
+                        }
 

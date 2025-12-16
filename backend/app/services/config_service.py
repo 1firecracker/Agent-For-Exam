@@ -93,6 +93,11 @@ class ConfigService:
             default_binding = "siliconflow"
             default_host = "https://api.siliconflow.cn/v1"
             
+            # Embedding API Key（使用全局 LLM API Key 作为默认值）
+            embedding_api_key_encrypted = ""
+            if config.settings.llm_binding_api_key:
+                embedding_api_key_encrypted = _encrypt_api_key(config.settings.llm_binding_api_key)
+            
             self._config_cache = {
                 "knowledge_graph": {
                     "binding": config.settings.kg_llm_binding or default_binding,
@@ -111,6 +116,12 @@ class ConfigService:
                     "model": config.settings.mindmap_llm_model or config.settings.llm_model or "",
                     "host": config.settings.mindmap_llm_binding_host or config.settings.llm_binding_host or default_host,
                     "api_key_encrypted": mindmap_api_key_encrypted or (_encrypt_api_key(config.settings.llm_binding_api_key) if config.settings.llm_binding_api_key else "")
+                },
+                "embedding": {
+                    "binding": config.settings.embedding_binding or "siliconflow",
+                    "model": config.settings.embedding_model or "Qwen/Qwen3-Embedding-0.6B",
+                    "host": config.settings.embedding_binding_host or config.settings.llm_binding_host or default_host,
+                    "api_key_encrypted": embedding_api_key_encrypted
                 }
             }
             self._save_config()
@@ -147,7 +158,16 @@ class ConfigService:
         }
         
         # 调试输出
-        print(f"📋 [Config] 读取 {scene} 配置: binding={result['binding']}, model={result['model']}, host={result['host'][:50] if result['host'] else 'None'}...")
+        config.get_logger("app.config").info(
+            "读取场景配置",
+            extra={
+                "event": "config.read_scene",
+                "scene": scene,
+                "binding": result["binding"],
+                "model": result["model"],
+                "host": result["host"][:50] if result["host"] else "None",
+            },
+        )
         
         return result
     
@@ -202,7 +222,14 @@ class ConfigService:
                 lightrag_service = LightRAGService()
                 lightrag_service.clear_all_instances()
             except Exception as e:
-                print(f"⚠️ [Config] 清除 LightRAG 实例缓存失败: {e}")
+                config.get_logger("app.config").warning(
+                    "清除 LightRAG 实例缓存失败",
+                    extra={
+                        "event": "config.clear_lightrag_failed",
+                        "scene": scene,
+                        "error_message": str(e),
+                    },
+                )
         elif scene == "chat":
             config.settings.chat_llm_binding = config_data["binding"]
             config.settings.chat_llm_model = config_data["model"]
@@ -213,13 +240,34 @@ class ConfigService:
             config.settings.mindmap_llm_model = config_data["model"]
             config.settings.mindmap_llm_binding_host = config_data["host"]
             config.settings.mindmap_llm_binding_api_key = config_data["api_key"]
+        elif scene == "embedding":
+            config.settings.embedding_binding = config_data["binding"]
+            config.settings.embedding_model = config_data["model"]
+            config.settings.embedding_binding_host = config_data["host"]
+            # embedding API Key 存储在配置服务中，lightrag_service 会直接从配置服务读取
+            # 这里只更新全局配置的 binding、model、host，API Key 由配置服务管理
+            
+            # 清除已缓存的 LightRAG 实例，强制重新创建（使用新配置）
+            try:
+                from app.services.lightrag_service import LightRAGService
+                lightrag_service = LightRAGService()
+                lightrag_service.clear_all_instances()
+            except Exception as e:
+                config.get_logger("app.config").warning(
+                    "清除 LightRAG 实例缓存失败",
+                    extra={
+                        "event": "config.clear_lightrag_failed",
+                        "scene": scene,
+                        "error_message": str(e),
+                    },
+                )
     
     def get_all_configs(self) -> Dict:
         """获取所有场景的配置（用于 API 返回，不包含 API Key）"""
         config_data = self._load_config()
         result = {}
         
-        for scene in ["knowledge_graph", "chat", "mindmap"]:
+        for scene in ["knowledge_graph", "chat", "mindmap", "embedding"]:
             scene_config = config_data.get(scene, {})
             result[scene] = {
                 "binding": scene_config.get("binding", "siliconflow"),
@@ -232,7 +280,7 @@ class ConfigService:
     
     def reload_all_configs(self):
         """重新加载所有配置到全局 settings（启动时调用）"""
-        for scene in ["knowledge_graph", "chat", "mindmap"]:
+        for scene in ["knowledge_graph", "chat", "mindmap", "embedding"]:
             self._apply_to_global_config(scene)
 
 

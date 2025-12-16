@@ -190,6 +190,16 @@ npm run dev
 - **后端 API**: http://localhost:8000
 - **API 文档**: http://localhost:8000/docs
 
+## 日志输出位置（后端）
+
+- **应用日志（业务 / Agent / 思维导图等）**
+  - 通过 `backend/app/config.py` 中的 `get_logger` 统一输出，格式为一行一个 JSON 对象（适合后续接入日志平台）。
+  - 默认写入文件：`backend/logs/app.log`（首次启动时自动创建 `logs/` 目录）。
+  - 日志级别由 `settings.debug` 控制：开发环境使用 `DEBUG`，否则为 `INFO`。
+- **访问日志（HTTP 请求）**
+  - 由 uvicorn 自身输出，启动命令可通过 `--no-access-log` 关闭访问日志（例如 `start_all.ps1` 中已启用）。
+  - 如需持久化访问日志，可在启动脚本中使用重定向或 uvicorn 自带的 `--log-config` 能力，和应用日志解耦管理。
+
 ## 主要功能
 
 ### 1. 文档管理与知识图谱
