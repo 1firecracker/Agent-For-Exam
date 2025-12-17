@@ -19,6 +19,8 @@ MODEL_LISTS = {
         "deepseek-ai/DeepSeek-V3.2-Exp",
         "MiniMaxAI/MiniMax-M2",
         "moonshotai/Kimi-K2-Thinking",
+        "Pro/Qwen/Qwen2.5-VL-7B-Instruct",
+        "zai-org/GLM-4.6V",
         "Qwen/Qwen2.5-72B-Instruct",
         "Qwen/Qwen2.5-32B-Instruct",
         "Qwen/Qwen2.5-14B-Instruct",

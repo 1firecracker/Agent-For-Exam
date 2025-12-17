@@ -34,14 +34,15 @@ class DocumentParser:
         else:
             raise ValueError(f"不支持的文件类型: {suffix}，仅支持 .pptx 和 .pdf")
     
-    def extract_text(self, file_path: str) -> str:
+    def extract_text(self, file_path: str, file_id: str = None) -> str:
         """提取文档纯文本内容
         
         Args:
             file_path: 文档文件路径
+            file_id: 文档ID（可选，用于嵌入元数据标记）
             
         Returns:
-            文档的纯文本内容
+            文档的纯文本内容（每页/每幻灯片前包含 [FILE:{file_id}][PAGE/SLIDE:{index}] 标记）
             
         Raises:
             ValueError: 不支持的文件类型
@@ -50,9 +51,9 @@ class DocumentParser:
         suffix = path.suffix.lower()
         
         if suffix == '.pptx':
-            return self.ppt_parser.extract_text(file_path)
+            return self.ppt_parser.extract_text(file_path, file_id=file_id)
         elif suffix == '.pdf':
-            return self.pdf_parser.extract_text(file_path)
+            return self.pdf_parser.extract_text(file_path, file_id=file_id)
         else:
             raise ValueError(f"不支持的文件类型: {suffix}，仅支持 .pptx 和 .pdf")
     

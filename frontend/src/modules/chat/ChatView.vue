@@ -3,7 +3,7 @@
     <!-- 对话区域（全屏） -->
     <div class="chat-main" :style="{ marginRight: isPanelCollapsed ? '0' : `${sidebarWidth}px` }">
       <!-- 消息列表区域 -->
-      <div class="messages-container" ref="messagesContainer">
+      <div class="messages-container" ref="messagesContainer" @click="handleReferenceClick">
         <div v-if="messages.length === 0" class="empty-state">
           <div class="logo-placeholder">
             <span class="logo-icon">✨</span>
@@ -26,8 +26,43 @@
               
               <!-- 用户消息 -->
               <template v-if="msg.role === 'user'">
-              <div class="bubble">
+                <div class="user-message-wrapper">
+                  <div v-if="editingMessageIndex !== index" class="bubble user-bubble">
                 {{ msg.content }}
+                    <button 
+                      class="edit-btn" 
+                      @click="startEdit(index, msg.content)"
+                      :disabled="isLoading"
+                      title="编辑消息"
+                    >
+                      <el-icon><Edit /></el-icon>
+                    </button>
+                  </div>
+                  <div v-else class="edit-wrapper">
+                    <textarea
+                      v-model="editingContent"
+                      class="edit-input"
+                      rows="3"
+                      ref="editTextareaRef"
+                    ></textarea>
+                    <div class="edit-actions">
+                      <button 
+                        class="edit-save-btn" 
+                        @click="handleSaveEdit(index)"
+                        :disabled="!editingContent.trim()"
+                      >
+                        <el-icon><Check /></el-icon>
+                        保存并重新生成
+                      </button>
+                      <button 
+                        class="edit-cancel-btn" 
+                        @click="cancelEdit"
+                      >
+                        <el-icon><Close /></el-icon>
+                        取消
+                      </button>
+                    </div>
+                  </div>
               </div>
               </template>
               
@@ -98,11 +133,19 @@
             ref="textareaRef"
           ></textarea>
           <button 
+            v-if="!isLoading"
             class="send-btn" 
-            :disabled="!inputMessage.trim() || isLoading"
+            :disabled="!inputMessage.trim() || isLoading || editingMessageIndex !== null"
             @click="handleSend"
           >
             <el-icon><Position /></el-icon>
+          </button>
+          <button 
+            v-else
+            class="stop-btn" 
+            @click="handleStop"
+          >
+            <el-icon><Close /></el-icon>
           </button>
         </div>
         <div class="input-footer">
@@ -144,6 +187,7 @@
               <!-- PPT 查看器 -->
               <PPTViewer 
                 v-if="conversationId" 
+                ref="pptViewerRef"
                 :default-file-id="selectedDocumentId"
               />
               <el-empty
@@ -176,7 +220,7 @@
 <script setup>
 import { ref, nextTick, onMounted, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Position, ArrowRight, ArrowLeft, Share } from '@element-plus/icons-vue'
+import { Position, ArrowRight, ArrowLeft, Share, Edit, Close, Check } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import katex from 'katex'
 import { useConversationStore } from './store/conversationStore'
@@ -187,6 +231,7 @@ import MindMapViewer from '../mindmap/components/MindMapViewer.vue'
 import PPTViewer from '../documents/components/PPTViewer/PPTViewer.vue'
 import ToolCallInline from './components/ToolCallInline.vue'
 import { api, BASE_URL } from '../../services/api'
+import chatService from './services/chatService'
 
 // 配置 marked 选项
 marked.setOptions({
@@ -204,6 +249,14 @@ const inputMessage = ref('')
 const isLoading = ref(false)
 const messagesContainer = ref(null)
 const textareaRef = ref(null)
+const editTextareaRef = ref(null)
+
+// 对话打断相关
+const abortController = ref(null)
+
+// 编辑相关
+const editingMessageIndex = ref(null)
+const editingContent = ref('')
 
 // 面板状态
 const isPanelCollapsed = ref(false)
@@ -224,6 +277,9 @@ const messages = ref([])
 
 // 当前选中的文档ID（用于 PPT 查看器）
 const selectedDocumentId = ref(null)
+
+// PPT 查看器引用
+const pptViewerRef = ref(null)
 
 // 获取当前对话的文档
 const currentDocuments = computed(() => {
@@ -271,17 +327,47 @@ const scrollToBottom = () => {
 const loadMessages = async () => {
   try {
     const res = await api.get(`/api/conversations/${conversationId}/messages`)
+    
     if (res.messages) {
       // 过滤掉 tool 角色的消息，这些消息不应该显示给用户
       // tool 消息包含大量的工具执行结果数据，会导致性能问题
-      messages.value = res.messages
+      let filteredMessages = res.messages
         .filter(m => m.role !== 'tool') // 过滤 tool 消息
         .map(m => ({
-        role: m.role === 'human' ? 'user' : m.role, // 兼容后端可能返回 human
+          role: m.role === 'human' ? 'user' : m.role, // 兼容后端可能返回 human
           content: m.content || '',
           streamItems: m.streamItems || null, // 保留 streamItems（工具调用信息在这里）
           toolCalls: m.toolCalls || null // 保留 toolCalls（向后兼容）
-      }))
+        }))
+      
+      // 合并连续的 assistant 消息（一条有 tool_calls，一条有 content）
+      const mergedMessages = []
+      for (let i = 0; i < filteredMessages.length; i++) {
+        const current = filteredMessages[i]
+        const next = filteredMessages[i + 1]
+        
+        // 如果当前是 assistant 消息，且只有 tool_calls 没有 content，下一条也是 assistant 且有 content
+        if (current.role === 'assistant' && 
+            next && next.role === 'assistant' &&
+            (!current.content || current.content.trim() === '') &&
+            current.toolCalls && current.toolCalls.length > 0 &&
+            next.content && next.content.trim() !== '') {
+          // 合并两条消息
+          const merged = {
+            role: 'assistant',
+            content: next.content,
+            streamItems: next.streamItems || current.streamItems || null,
+            toolCalls: current.toolCalls || next.toolCalls || null
+          }
+          mergedMessages.push(merged)
+          i++ // 跳过下一条消息，因为已经合并了
+        } else {
+          mergedMessages.push(current)
+        }
+      }
+      
+      messages.value = mergedMessages
+      
       scrollToBottom()
     }
   } catch (e) {
@@ -290,7 +376,7 @@ const loadMessages = async () => {
 }
 
 const handleSend = async () => {
-  if (!inputMessage.value.trim() || isLoading.value) return
+  if (!inputMessage.value.trim() || isLoading.value || editingMessageIndex.value !== null) return
 
   const content = inputMessage.value.trim()
   inputMessage.value = ''
@@ -305,6 +391,9 @@ const handleSend = async () => {
   scrollToBottom()
 
   isLoading.value = true
+  
+  // 创建 AbortController
+  abortController.value = new AbortController()
 
   // 2. 准备 AI 消息占位符
   const aiMessageIndex = messages.value.length
@@ -326,7 +415,8 @@ const handleSend = async () => {
       body: JSON.stringify({
         query: content,
         mode: 'agent' // 使用 agent 模式以支持工具调用
-      })
+      }),
+      signal: abortController.value.signal
     })
 
     if (!response.ok) {
@@ -545,6 +635,11 @@ const handleSend = async () => {
     }
 
     while (true) {
+      if (abortController.value && abortController.value.signal.aborted) {
+        reader.cancel()
+        break
+      }
+      
       const { done, value } = await reader.read()
       if (done) break
 
@@ -619,6 +714,12 @@ const handleSend = async () => {
     }
     
   } catch (error) {
+    // 如果是用户主动打断，不显示错误提示，保留已接收内容
+    if (error.name === 'AbortError') {
+      // 保留已接收的部分内容，不显示错误
+      console.log('用户中断了生成')
+    } else {
+      // 其他错误，显示错误信息
     const errorMsg = `[Error: ${error.message}]`
     const lastItem = streamItems[streamItems.length - 1]
     if (lastItem && lastItem.type === 'text') {
@@ -630,7 +731,6 @@ const handleSend = async () => {
       })
     }
     messages.value[aiMessageIndex].content += `\n${errorMsg}`
-    // streamItems 已经是响应式数组的引用，无需重新赋值
     
     // 即使出错也尝试保存消息
     try {
@@ -643,11 +743,153 @@ const handleSend = async () => {
       )
     } catch (saveError) {
       console.error('❌ 保存错误消息失败:', saveError)
+      }
     }
   } finally {
     isLoading.value = false
+    abortController.value = null
     scrollToBottom()
   }
+}
+
+// 停止生成
+const handleStop = () => {
+  if (abortController.value) {
+    abortController.value.abort()
+    isLoading.value = false
+  }
+}
+
+// 开始编辑
+const startEdit = (index, content) => {
+  editingMessageIndex.value = index
+  editingContent.value = content
+  nextTick(() => {
+    if (editTextareaRef.value) {
+      editTextareaRef.value.focus()
+    }
+  })
+}
+
+// 取消编辑
+const cancelEdit = () => {
+  editingMessageIndex.value = null
+  editingContent.value = ''
+}
+
+// 保存编辑并重新生成
+const handleSaveEdit = async (index) => {
+  if (!editingContent.value.trim()) return
+  
+  const newContent = editingContent.value.trim()
+  
+  // 获取原始消息列表（包含 tool 消息）以找到正确的索引
+  const originalMessages = await api.get(`/api/conversations/${conversationId}/messages`)
+  
+  if (!originalMessages.messages) {
+    console.error('无法获取原始消息列表')
+    return
+  }
+  
+  // 找到被编辑的用户消息在原始列表中的索引
+  // 前端 messages.value 中索引为 index 的用户消息
+  const editedMessage = messages.value[index]
+  
+  if (!editedMessage || editedMessage.role !== 'user') {
+    console.error('无效的编辑索引')
+    return
+  }
+  
+  // 在原始消息列表中找到对应的用户消息
+  // 需要模拟前端的过滤和合并逻辑，确保索引匹配正确
+  let originalIndex = -1
+  const editedContentNormalized = editedMessage.content.trim()
+  
+  // 模拟前端的过滤和合并逻辑，构建前端索引到原始索引的映射
+  // 步骤1：过滤掉 tool 消息，并记录每个过滤后消息对应的原始索引
+  const filteredWithIndex = []
+  for (let i = 0; i < originalMessages.messages.length; i++) {
+    if (originalMessages.messages[i].role !== 'tool') {
+      filteredWithIndex.push({
+        msg: originalMessages.messages[i],
+        originalIndex: i,
+        role: originalMessages.messages[i].role === 'human' ? 'user' : originalMessages.messages[i].role
+      })
+    }
+  }
+  
+  // 步骤2：模拟合并逻辑，构建前端索引映射
+  const frontendToOriginalMap = []
+  for (let i = 0; i < filteredWithIndex.length; i++) {
+    const current = filteredWithIndex[i]
+    const next = filteredWithIndex[i + 1]
+    
+    // 检查是否需要合并（与 loadMessages 中的逻辑一致）
+    if (current.role === 'assistant' && 
+        next && next.role === 'assistant' &&
+        (!current.msg.content || current.msg.content.trim() === '') &&
+        current.msg.toolCalls && current.msg.toolCalls.length > 0 &&
+        next.msg.content && next.msg.content.trim() !== '') {
+      // 合并情况：使用第二条消息的原始索引（因为内容在第二条）
+      frontendToOriginalMap.push(next.originalIndex)
+      i++ // 跳过下一条
+    } else {
+      // 非合并情况：直接使用当前消息的原始索引
+      frontendToOriginalMap.push(current.originalIndex)
+    }
+  }
+  
+  // 步骤3：使用映射表查找原始索引
+  if (frontendToOriginalMap[index] !== undefined) {
+    const mappedIndex = frontendToOriginalMap[index]
+    const originalMsg = originalMessages.messages[mappedIndex]
+    
+    // 验证：确保是用户消息
+    if (originalMsg && (originalMsg.role === 'user' || originalMsg.role === 'human')) {
+      originalIndex = mappedIndex
+    }
+  }
+  
+  // 如果映射失败，回退到简单匹配（向后兼容）
+  if (originalIndex === -1) {
+    let filteredCount = 0
+    for (let i = 0; i < originalMessages.messages.length; i++) {
+      const msg = originalMessages.messages[i]
+      if (msg.role === 'tool') {
+        continue
+      }
+      if (filteredCount === index && (msg.role === 'user' || msg.role === 'human')) {
+        originalIndex = i
+        break
+      }
+      if (msg.role !== 'tool') {
+        filteredCount++
+      }
+    }
+  }
+  
+  if (originalIndex === -1) {
+    console.error('无法找到原始消息索引')
+    return
+  }
+  
+  // 调用后端重置历史，保留该索引之前的所有消息
+  await chatService.resetHistory(conversationId, originalIndex)
+  
+  // 前端截断消息数组
+  messages.value = messages.value.slice(0, index)
+  
+  // 重置编辑状态
+  editingMessageIndex.value = null
+  editingContent.value = ''
+  
+  // 将新内容填入输入框
+  inputMessage.value = newContent
+  
+  // 自动触发发送
+  nextTick(() => {
+    handleSend()
+  })
 }
 
 onMounted(async () => {
@@ -737,6 +979,83 @@ const formatThinkContent = (text) => {
   return formatEnhancedMarkdown(thinkText)
 }
 
+// 从 References 部分提取编号到文档信息的映射
+const extractReferenceMap = (text) => {
+  const refMap = new Map()
+  if (!text) return refMap
+  
+  // 查找 References 部分
+  const refSectionMatch = text.match(/##\s+References\s*\n([\s\S]*?)(?=\n##|$)/i)
+  if (!refSectionMatch) return refMap
+  
+  const refContent = refSectionMatch[1]
+  
+  // 匹配 [1] ... [[file_id|page]]，中间允许出现 [文档] / [知识图谱] 等任意内容
+  const refItemPattern = /\[(\d+)\][\s\S]*?\[\[([^|\]]+)\|(\d+)\]\]/g
+  let match
+  while ((match = refItemPattern.exec(refContent)) !== null) {
+    const refNum = parseInt(match[1])
+    const fileId = match[2]
+    const page = parseInt(match[3])
+    refMap.set(refNum, { fileId, page })
+  }
+  
+  return refMap
+}
+
+// 解析引用标记并转换为可点击链接
+const parseReferences = (html, originalText = '') => {
+  if (!html) return html
+  
+  // 从原始文本中提取引用映射（编号 -> { fileId, page }）
+  const refMap = extractReferenceMap(originalText)
+  
+  // 先移除原始的 [[file_id|page]] 标记（作为隐藏元数据，不直接展示给用户）
+  let result = html.replace(/\[\[([^|\]]+)\|([0-9]+)\]\]/g, '')
+  
+  // 再处理 [1]、[2] 等编号格式（如果 References 中有对应的文档信息）
+  result = result.replace(/\[(\d+)\]/g, (match, refNum) => {
+    const refInfo = refMap.get(parseInt(refNum))
+    if (refInfo) {
+      return `<span class="reference-link clickable" data-file-id="${refInfo.fileId}" data-page="${refInfo.page}">[${refNum}]</span>`
+    }
+    // 如果没有对应的文档信息，保持原样但添加样式类（不可点击）
+    return `<span class="reference-number">[${refNum}]</span>`
+  })
+  
+  return result
+}
+
+// 跳转到文档指定页码
+const jumpToDocumentPage = async (fileId, page) => {
+  // 切换到 Documents 标签
+  activeTab.value = 'documents'
+  
+  // 如果侧边栏折叠，展开它
+  if (isPanelCollapsed.value) {
+    isPanelCollapsed.value = false
+  }
+  
+  // 更新选中的文档ID
+  selectedDocumentId.value = fileId
+  
+  // 等待 DOM 更新
+  await nextTick()
+  
+  // 等待 PPTViewer 加载完成并跳转（通过轮询检查）
+  let retryCount = 0
+  const maxRetries = 20
+  const checkAndJump = () => {
+    if (pptViewerRef.value && pptViewerRef.value.jumpToPage) {
+      pptViewerRef.value.jumpToPage(Number(page))
+    } else if (retryCount < maxRetries) {
+      retryCount++
+      setTimeout(checkAndJump, 300)
+    }
+  }
+  checkAndJump()
+}
+
 // 格式化消息，识别警告提示并应用斜体样式，移除 think 标签
 const formatMessageWithWarning = (text) => {
   if (!text) return ''
@@ -751,7 +1070,29 @@ const formatMessageWithWarning = (text) => {
   // 处理警告提示
   html = html.replace(/(⚠️[^：:]*[：:][^<\n]*)/g, '<span class="warning-text">$1</span>')
   
+  // 解析引用标记（传入原始文本以提取 References 映射）
+  html = parseReferences(html, text)
+  
   return html
+}
+
+// 处理引用链接点击事件
+const handleReferenceClick = (event) => {
+  // 向上查找最近的 .reference-link 元素（处理点击的是内部元素的情况）
+  let target = event.target
+  while (target && target !== event.currentTarget) {
+    if (target.classList && target.classList.contains('reference-link') && target.classList.contains('clickable')) {
+      const fileId = target.dataset.fileId
+      const page = target.dataset.page
+      if (fileId && page) {
+        jumpToDocumentPage(fileId, page)
+        event.preventDefault()
+        event.stopPropagation()
+      }
+      return
+    }
+    target = target.parentElement
+  }
 }
 
 // 在 Markdown 文本中先渲染 LaTeX 为 KaTeX HTML
@@ -919,6 +1260,114 @@ const formatEnhancedMarkdown = (text) => {
   white-space: pre-wrap;
 }
 
+.user-message-wrapper {
+  position: relative;
+}
+
+.user-bubble {
+  position: relative;
+  padding-right: 32px;
+}
+
+.edit-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s, background-color 0.2s;
+}
+
+.user-bubble:hover .edit-btn {
+  opacity: 1;
+}
+
+.edit-btn:hover {
+  background-color: var(--bg-sidebar);
+  color: var(--text-primary);
+}
+
+.edit-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.edit-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.edit-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background-color: var(--bg-app);
+  resize: vertical;
+  min-height: 60px;
+}
+
+.edit-input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.edit-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.edit-save-btn,
+.edit-cancel-btn {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s;
+}
+
+.edit-save-btn {
+  background-color: var(--color-accent);
+  color: white;
+}
+
+.edit-save-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.edit-save-btn:disabled {
+  background-color: #E5E5E5;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.edit-cancel-btn {
+  background-color: var(--bg-sidebar);
+  color: var(--text-primary);
+}
+
+.edit-cancel-btn:hover {
+  background-color: var(--bg-app);
+}
+
 /* 减小 Markdown 渲染后的段落间距 */
 .message-text :deep(p) {
   margin: 0.15em 0; /* 进一步减小段落间距 */
@@ -1009,6 +1458,24 @@ const formatEnhancedMarkdown = (text) => {
 .send-btn:disabled {
   background-color: #E5E5E5;
   cursor: not-allowed;
+}
+
+.stop-btn {
+  background-color: #ff4444;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.stop-btn:hover {
+  background-color: #cc0000;
 }
 
 .input-footer {
@@ -1186,6 +1653,30 @@ const formatEnhancedMarkdown = (text) => {
 .warning-text {
   font-style: italic;
   color: var(--text-tertiary);
+}
+
+.message-text :deep(.reference-link) {
+  color: #409eff;
+  text-decoration: underline;
+  transition: all 0.2s;
+}
+
+.message-text :deep(.reference-link.clickable) {
+  cursor: pointer;
+  font-weight: 500;
+  background-color: rgba(64, 158, 255, 0.1);
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.message-text :deep(.reference-link.clickable:hover) {
+  color: #66b1ff;
+  background-color: rgba(64, 158, 255, 0.2);
+}
+
+.message-text :deep(.reference-number) {
+  color: #909399;
+  font-weight: normal;
 }
 
 .tool-calls-section {

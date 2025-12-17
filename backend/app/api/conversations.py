@@ -184,6 +184,9 @@ class MessageResponse(BaseModel):
 class MessagesResponse(BaseModel):
     messages: List[MessageResponse]
 
+class MessageResetRequest(BaseModel):
+    index: int = Field(..., ge=0, description="保留到的最后一条消息索引")
+
 
 @router.get("/{conversation_id}/messages", response_model=MessagesResponse)
 async def get_messages(conversation_id: str):
@@ -271,6 +274,34 @@ async def save_message(conversation_id: str, request: MessageRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="保存消息失败"
+        )
+    
+    return {"status": "success"}
+
+
+@router.post("/{conversation_id}/messages/reset", status_code=status.HTTP_200_OK)
+async def reset_messages(conversation_id: str, request: MessageResetRequest):
+    """重置对话历史，保留指定索引之前的所有消息
+    
+    Args:
+        conversation_id: 对话ID
+        request: 包含 index 字段，表示保留到的最后一条消息索引
+    """
+    service = ConversationService()
+    
+    conversation = service.get_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"对话 {conversation_id} 不存在"
+        )
+    
+    success = service.reset_history(conversation_id, request.index)
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="重置历史失败"
         )
     
     return {"status": "success"}

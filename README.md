@@ -28,12 +28,9 @@ NLP_project/
 │   └── requirements.txt
 ├── frontend/                   # 前端应用（Vue 3 + Vite）
 │   ├── src/                   # 源代码
-│   │   ├── views/            # 页面级组件（路由入口）
-│   │   ├── modules/          # 功能模块（chat、graph、mindmap、documents、settings）
-│   │   ├── services/         # 公共服务（api.js）
-│   │   ├── router/            # 路由配置
-│   │   └── layout/            # 布局组件
-│   ├── docs/                  # 前端开发文档
+│   │   ├── components/       # Vue 组件
+│   │   ├── stores/           # Pinia 状态管理
+│   │   └── services/         # API 服务
 │   └── package.json
 ├── LightRAG/                   # LightRAG 框架核心代码
 └── start_all.ps1              # 一键启动脚本
@@ -86,14 +83,7 @@ cd frontend
 
 # 安装依赖
 npm install
-
-# 启动开发服务器
-npm run dev
 ```
-
-访问 http://localhost:5173
-
-**详细的前端开发文档**：请查看 [frontend/README.md](./frontend/README.md) 了解项目结构、模块说明和开发规范。
 
 ### 4. 配置环境变量（必需）
 
@@ -338,23 +328,14 @@ npm run dev
 
 ### 前端
 - **Vue 3** - 渐进式前端框架（Composition API）
-- **Vite** - 快速的前端构建工具
+- **Element Plus** - 企业级 UI 组件库
 - **Pinia** - 现代化状态管理
 - **Vue Router** - 单页应用路由管理
-- **Element Plus** - 企业级 UI 组件库
 - **Cytoscape.js** - 知识图谱可视化引擎
 - **Markmap** - 思维导图可视化引擎（markmap-view, markmap-lib）
 - **JSZip** - ZIP 文件生成库（用于 XMind 导出）
 - **Axios** - HTTP 客户端库
-
-**前端核心功能**：
-- 智能对话（基于 Agent 模式的问答，支持工具调用可视化）
-- 知识图谱（交互式图谱展示，支持节点过滤和搜索）
-- 思维导图（自动生成文档思维导图，支持导出 XMind）
-- 文档管理（PPTX/PDF 文档浏览，支持文本高亮和表格渲染）
-- 设置配置（前端统一配置 LLM 模型和 API Key）
-
-**详细的前端文档**：请查看 [frontend/README.md](./frontend/README.md) 了解完整的项目结构、模块说明、开发规范和功能特性。
+- **Vite** - 快速的前端构建工具
 
 ### 存储架构
 - **KV 存储**: JSON 文件存储（开发环境）

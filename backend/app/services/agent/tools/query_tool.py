@@ -117,39 +117,117 @@ async def query_knowledge_graph_handler(
             if low_level_keywords:
                 result_parts.append(f"低级关键词: {', '.join(low_level_keywords)}")
             
-            # 添加实体信息
+            # 尝试加载实体页码映射表（如果存在）
+            entity_page_map = service.load_entity_page_mapping(conversation_id)
+            
+            # 处理实体，添加 file_id 和 page_index 信息
+            enriched_entities = []
             if entities:
                 result_parts.append(f"\n找到 {len(entities)} 个相关实体:")
                 for i, entity in enumerate(entities[:10], 1):  # 最多显示10个实体
                     entity_name = entity.get("entity_name", "")
                     entity_type = entity.get("entity_type", "")
                     description = entity.get("description", "")
+                    source_id = entity.get("source_id", "")
+                    
+                    file_id = None
+                    page_index = None
+                    
+                    # 1. 优先查实体页码映射表
+                    if entity_name and entity_name in entity_page_map:
+                        candidates = entity_page_map[entity_name]
+                        if candidates:
+                            # 候选列表已按分数降序排列，取第一个（最匹配的）
+                            best_candidate = candidates[0]
+                            file_id = best_candidate.get("file_id")
+                            page_index = best_candidate.get("page_index")
+                    
+                    # 2. 如果映射表中没有，回退到原有的 chunk 逻辑
+                    if (not file_id or page_index is None) and source_id:
+                        chunks_info = await service._get_source_chunks_info(lightrag, source_id, conversation_id)
+                        if chunks_info:
+                            # 选择策略：优先选择有页码的 chunk，如果有多个，选择页码最小的
+                            # 这样可以确保标注的页码是实体最早出现的页码
+                            chunks_with_page = [c for c in chunks_info if c.get("page_index") is not None]
+                            if chunks_with_page:
+                                # 选择页码最小的 chunk（实体最早出现的页码）
+                                selected_chunk = min(chunks_with_page, key=lambda x: x.get("page_index", 9999))
+                                file_id = selected_chunk.get("file_id")
+                                page_index = selected_chunk.get("page_index")
+                            else:
+                                # 如果没有页码信息，使用第一个 chunk
+                                first_chunk = chunks_info[0]
+                                file_id = first_chunk.get("file_id")
+                                page_index = first_chunk.get("page_index")
+                    
+                    # 创建增强的实体对象
+                    enriched_entity = entity.copy()
+                    if file_id:
+                        enriched_entity["file_id"] = file_id
+                    if page_index is not None:
+                        enriched_entity["page_index"] = page_index
+                    enriched_entities.append(enriched_entity)
+                    
+                    # 格式化显示
+                    entity_display = f"{i}. {entity_name} ({entity_type})"
+                    if file_id and page_index is not None:
+                        entity_display += f" [来源: {file_id[:8]}... 第{page_index}页]"
+                    elif file_id:
+                        entity_display += f" [来源: {file_id[:8]}...]"
                     if description:
-                        result_parts.append(f"{i}. {entity_name} ({entity_type}): {description}")
+                        result_parts.append(f"{entity_display}: {description}")
                     else:
-                        result_parts.append(f"{i}. {entity_name} ({entity_type})")
+                        result_parts.append(entity_display)
             
             # 添加关系信息
+            enriched_relationships = []
             if relationships:
                 result_parts.append(f"\n找到 {len(relationships)} 个相关关系:")
                 for i, rel in enumerate(relationships[:10], 1):  # 最多显示10个关系
                     src = rel.get("src_id", "")
                     tgt = rel.get("tgt_id", "")
                     desc = rel.get("description", "")
+                    enriched_relationships.append(rel)
                     if desc:
                         result_parts.append(f"{i}. {src} -> {tgt}: {desc}")
                     else:
                         result_parts.append(f"{i}. {src} -> {tgt}")
             
-            # 添加文本块信息
+            # 处理文本块，添加 file_id 和 page_index 信息
+            enriched_chunks = []
             if chunks:
                 result_parts.append(f"\n找到 {len(chunks)} 个相关文本块:")
                 for i, chunk in enumerate(chunks[:5], 1):  # 最多显示5个文本块
                     content = chunk.get("content", "")
+                    chunk_id = chunk.get("chunk_id") or chunk.get("id", "")
+                    
+                    # 从 chunk_id 获取 chunk 信息，提取 file_id 和 page_index
+                    file_id = None
+                    page_index = None
+                    if chunk_id:
+                        chunks_info = await service._get_source_chunks_info(lightrag, chunk_id, conversation_id)
+                        if chunks_info:
+                            first_chunk = chunks_info[0]
+                            file_id = first_chunk.get("file_id")
+                            page_index = first_chunk.get("page_index")
+                    
+                    # 创建增强的 chunk 对象
+                    enriched_chunk = chunk.copy()
+                    if file_id:
+                        enriched_chunk["file_id"] = file_id
+                    if page_index is not None:
+                        enriched_chunk["page_index"] = page_index
+                    enriched_chunks.append(enriched_chunk)
+                    
                     if content:
                         # 截断过长的内容
                         content_preview = content[:200] + "..." if len(content) > 200 else content
-                        result_parts.append(f"{i}. {content_preview}")
+                        chunk_display = f"{i}. {content_preview}"
+                        if file_id and page_index is not None:
+                            chunk_display += f" [来源: {file_id[:8]}... 第{page_index}页]"
+                        elif file_id:
+                            chunk_display += f" [来源: {file_id[:8]}...]"
+                        result_parts.append(chunk_display)
             
             formatted_result = "\n".join(result_parts)
             
@@ -158,9 +236,9 @@ async def query_knowledge_graph_handler(
                 "message": f"查询完成（模式: {mode}），找到 {len(entities)} 个实体，{len(relationships)} 个关系，{len(chunks)} 个文本块",
                 "result": formatted_result,
                 "raw_data": {
-                    "entities": entities,
-                    "relationships": relationships,
-                    "chunks": chunks,
+                    "entities": enriched_entities if entities else entities,
+                    "relationships": enriched_relationships if relationships else relationships,
+                    "chunks": enriched_chunks if chunks else chunks,
                     "metadata": metadata
                 },
                 "mode": mode,

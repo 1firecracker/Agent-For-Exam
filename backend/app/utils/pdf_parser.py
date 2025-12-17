@@ -46,24 +46,52 @@ class PDFParser:
             "pages": pages_data
         }
     
-    def extract_text(self, file_path: str) -> str:
+    def extract_text(self, file_path: str, file_id: str = None) -> str:
         """提取 PDF 的纯文本内容
         
         Args:
             file_path: PDF 文件路径
+            file_id: 文档ID（可选，用于嵌入元数据标记）
             
         Returns:
-            所有页面文本内容（用换行符分隔）
+            所有页面文本内容（用换行符分隔，每页前添加 [FILE:{file_id}][PAGE:N] 标记）
         """
         texts = []
         
         with pdfplumber.open(file_path) as pdf:
-            for page in pdf.pages:
+            for page_num, page in enumerate(pdf.pages, 1):
                 text = page.extract_text()
                 if text and text.strip():
-                    texts.append(text.strip())
+                    # 构建元数据标记
+                    if file_id:
+                        texts.append(f"[FILE:{file_id}][PAGE:{page_num}]\n{text.strip()}")
+                    else:
+                        texts.append(f"[PAGE:{page_num}]\n{text.strip()}")
         
         return "\n\n".join(texts)
+    
+    def extract_pages(self, file_path: str, file_id: str = None) -> List[Dict[str, Any]]:
+        """提取 PDF 的页面内容（页级三元库）
+        
+        Args:
+            file_path: PDF 文件路径
+            file_id: 文档ID
+            
+        Returns:
+            页面列表，每个元素包含 page_index 和 content
+        """
+        pages = []
+        
+        with pdfplumber.open(file_path) as pdf:
+            for page_num, page in enumerate(pdf.pages, 1):
+                text = page.extract_text()
+                if text and text.strip():
+                    pages.append({
+                        "page_index": page_num,
+                        "content": text.strip()
+                    })
+        
+        return pages
     
     def _extract_text(self, page) -> str:
         """提取页面文本"""

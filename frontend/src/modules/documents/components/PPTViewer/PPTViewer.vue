@@ -177,6 +177,16 @@ const handleSlideChange = (slideNumber) => {
   currentSlideNumber.value = slideNumber
 }
 
+const jumpToPage = (pageNumber) => {
+  if (pageNumber >= 1 && pageNumber <= slides.value.length) {
+    currentSlideNumber.value = pageNumber
+  }
+}
+
+defineExpose({
+  jumpToPage
+})
+
 const handlePrevious = () => {
   if (currentSlideNumber.value > 1) {
     currentSlideNumber.value--

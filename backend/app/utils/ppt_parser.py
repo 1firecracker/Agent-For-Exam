@@ -35,20 +35,28 @@ class PPTParser:
             "slides": slides_data
         }
     
-    def extract_text(self, file_path: str) -> str:
+    def extract_text(self, file_path: str, file_id: str = None) -> str:
         """提取 PPT 的纯文本内容
         
         Args:
             file_path: PPTX 文件路径
+            file_id: 文档ID（可选，用于嵌入元数据标记）
             
         Returns:
-            所有幻灯片文本内容（用换行符分隔）
+            所有幻灯片文本内容（用换行符分隔，每张幻灯片前添加 [FILE:{file_id}][SLIDE:N] 标记）
         """
         prs = Presentation(file_path)
         texts = []
         
-        for slide in prs.slides:
+        for slide_idx, slide in enumerate(prs.slides, 1):
             slide_texts = []
+            
+            # 构建元数据标记
+            if file_id:
+                slide_texts.append(f"[FILE:{file_id}][SLIDE:{slide_idx}]")
+            else:
+                slide_texts.append(f"[SLIDE:{slide_idx}]")
+            
             # 提取标题
             title = self._extract_title(slide)
             if title:
@@ -62,6 +70,40 @@ class PPTParser:
                 texts.append("\n".join(slide_texts))
         
         return "\n\n".join(texts)
+    
+    def extract_pages(self, file_path: str, file_id: str = None) -> List[Dict[str, Any]]:
+        """提取 PPT 的幻灯片内容（页级三元库）
+        
+        Args:
+            file_path: PPTX 文件路径
+            file_id: 文档ID
+            
+        Returns:
+            幻灯片列表，每个元素包含 page_index (slide_number) 和 content
+        """
+        prs = Presentation(file_path)
+        pages = []
+        
+        for slide_idx, slide in enumerate(prs.slides, 1):
+            slide_text = ""
+            
+            # 提取标题
+            title = self._extract_title(slide)
+            if title:
+                slide_text += title + "\n"
+            
+            # 提取内容
+            content = self._extract_text(slide)
+            if content:
+                slide_text += content
+            
+            if slide_text.strip():
+                pages.append({
+                    "page_index": slide_idx,
+                    "content": slide_text.strip()
+                })
+        
+        return pages
     
     def _extract_title(self, slide) -> str:
         """提取幻灯片标题"""

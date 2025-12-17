@@ -1,12 +1,13 @@
 <template>
   <ClaudeLayout @open-settings="showSettings = true">
+    <!-- 设置对话框 -->
     <SettingsDialog v-model="showSettings" />
   </ClaudeLayout>
 </template>
 
 <script setup>
 import { ref } from 'vue'
-import SettingsDialog from './modules/settings/components/SettingsDialog.vue'
+import SettingsDialog from './components/SettingsDialog.vue'
 import ClaudeLayout from './layout/ClaudeLayout.vue'
 
 const showSettings = ref(false)

@@ -270,6 +270,67 @@ class DocumentService:
             "total_files": len(uploaded_files)
         }
     
+    async def build_page_index_json(
+        self,
+        conversation_id: str,
+        document_id: str,
+        file_path: str
+    ) -> None:
+        """
+        解析指定文档，构建并保存 page_index JSON:
+        backend/uploads/metadata/page_index/{conversation_id}/{document_id}.json
+        """
+        try:
+            print(f"📖 开始构建页级索引: {document_id[:8]}...")
+            
+            # 确定文件类型
+            file_ext = Path(file_path).suffix.lower()
+            pages = []
+            
+            if file_ext == '.pdf':
+                from app.utils.pdf_parser import PDFParser
+                parser = PDFParser()
+                pages = parser.extract_pages(file_path, file_id=document_id)
+            elif file_ext in ['.ppt', '.pptx']:
+                from app.utils.ppt_parser import PPTParser
+                parser = PPTParser()
+                pages = parser.extract_pages(file_path, file_id=document_id)
+            else:
+                print(f"⚠️ 不支持构建页级索引的文件类型: {file_ext}")
+                return
+
+            if not pages:
+                print(f"⚠️ 文档 {document_id[:8]} 未提取到任何页面内容")
+                return
+
+            # 构建 JSON 数据
+            document_info = self.get_document(conversation_id, document_id)
+            filename = document_info.get("filename", Path(file_path).name) if document_info else Path(file_path).name
+            
+            page_index_data = {
+                "conversation_id": conversation_id,
+                "document_id": document_id,
+                "filename": filename,
+                "pages": pages
+            }
+            
+            # 确定存储路径
+            # uploads/metadata/page_index/{conversation_id}/{document_id}.json
+            page_index_dir = Path(config.settings.conversations_metadata_dir) / "page_index" / conversation_id
+            page_index_dir.mkdir(parents=True, exist_ok=True)
+            
+            page_index_file = page_index_dir / f"{document_id}.json"
+            
+            # 写入文件
+            with open(page_index_file, 'w', encoding='utf-8') as f:
+                json.dump(page_index_data, f, ensure_ascii=False, indent=2)
+                
+            print(f"✅ 页级索引构建完成: {page_index_file}")
+            
+        except Exception as e:
+            print(f"❌ 构建页级索引失败: {document_id[:8]}... 错误: {e}")
+            # 不抛出异常，避免影响主流程
+
     async def process_document(self, conversation_id: str, document_id: str):
         """处理文档：解析文本并插入 LightRAG（异步后台任务）
         
@@ -307,14 +368,17 @@ class DocumentService:
                 if not file_path or not file_path.exists():
                     raise FileNotFoundError(f"文件不存在: {document_id}")
                 
-                # 解析文档，提取文本
-                text = self.document_parser.extract_text(str(file_path))
+                # 解析文档，提取文本（传入 file_id 以嵌入元数据标记）
+                text = self.document_parser.extract_text(str(file_path), file_id=document_id)
                 
                 if not text or not text.strip():
                     raise ValueError("文档解析后文本内容为空")
                 
                 # 清理 base64 字符串并保存
                 cleaned_text, base64_map = self._clean_base64_and_save(text, conversation_id)
+                
+                # 构建页级三元库 JSON（异步不阻塞主流程，但为了简单这里先同步调用）
+                await self.build_page_index_json(conversation_id, document_id, str(file_path))
                 
                 # 不再自动生成思维脑图，改为通过 Agent 模式按需生成
                 # 1. 直接插入到 LightRAG（生成知识图谱，使用清理后的文本）
@@ -331,6 +395,16 @@ class DocumentService:
                     status["documents"][document_id]["status"] = "completed"
                     status["documents"][document_id]["lightrag_track_id"] = track_id
                     self._save_status(conversation_id, status)
+                
+                # 构建/更新 实体→页码映射表
+                try:
+                    print(f"🔄 触发实体页码映射更新: {conversation_id}...")
+                    from app.services.graph_service import GraphService
+                    graph_service = GraphService()
+                    await graph_service.build_entity_page_mapping(conversation_id)
+                except Exception as e:
+                    print(f"⚠️ 实体页码映射更新失败: {e}")
+                    # 不抛出异常，避免影响文档处理状态标记为完成
                 
                 print(f"✅ 文档处理完成: {document_id[:8]}...")
             

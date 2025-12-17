@@ -90,7 +90,7 @@ async def generate_mindmap_handler(
         for doc in documents:
             file_path = doc_service.file_manager.get_file_path(conversation_id, doc["file_id"])
             if file_path and file_path.exists():
-                text = doc_service.document_parser.extract_text(str(file_path))
+                text = doc_service.document_parser.extract_text(str(file_path), file_id=doc["file_id"])
                 if text:
                     doc_list.append({
                         "filename": doc["filename"],

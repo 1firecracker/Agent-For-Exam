@@ -400,3 +400,39 @@ class ConversationService:
         except:
             return []
 
+    def reset_history(self, conversation_id: str, message_index: int) -> bool:
+        """重置对话历史，保留指定索引之前的所有消息
+        
+        Args:
+            conversation_id: 对话ID
+            message_index: 保留到的最后一条消息索引（保留索引 0 到 message_index - 1 的消息）
+            
+        Returns:
+            是否重置成功
+        """
+        messages_file = self._get_messages_file(conversation_id)
+        
+        if not messages_file.exists():
+            return False
+        
+        messages = []
+        if messages_file.exists():
+            try:
+                with open(messages_file, 'r', encoding='utf-8') as f:
+                    messages = json.load(f)
+            except:
+                return False
+        
+        if not isinstance(messages, list):
+            return False
+        
+        if message_index < 0 or message_index > len(messages):
+            return False
+        
+        truncated_messages = messages[:message_index]
+        
+        with open(messages_file, 'w', encoding='utf-8') as f:
+            json.dump(truncated_messages, f, ensure_ascii=False, indent=2)
+        
+        return True
+

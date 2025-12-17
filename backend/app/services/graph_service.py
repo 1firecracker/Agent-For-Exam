@@ -52,15 +52,16 @@ class GraphService:
         except Exception:
             return None
     
-    async def _get_source_chunks_info(self, lightrag, source_id: str) -> List[Dict[str, Any]]:
+    async def _get_source_chunks_info(self, lightrag, source_id: str, conversation_id: str = None) -> List[Dict[str, Any]]:
         """从 source_id 获取 chunk 信息，用于映射到文档
         
         Args:
             lightrag: LightRAG 实例
             source_id: source_id（可能是多个 chunk_id 用分隔符连接）
+            conversation_id: 对话ID（可选，用于解析文档信息）
             
         Returns:
-            chunk 信息列表
+            chunk 信息列表，包含 file_id 和 page_index（如果可用）
         """
         if not source_id:
             return []
@@ -68,8 +69,9 @@ class GraphService:
         chunks_info = []
         try:
             # source_id 可能是多个 chunk_id 用 GRAPH_FIELD_SEP 分隔
-            # 先尝试分割
-            chunk_ids = source_id.split("|") if "|" in source_id else [source_id]
+            # 使用正确的分隔符：GRAPH_FIELD_SEP = "<SEP>"
+            from lightrag.constants import GRAPH_FIELD_SEP
+            chunk_ids = source_id.split(GRAPH_FIELD_SEP) if GRAPH_FIELD_SEP in source_id else [source_id]
             
             for chunk_id in chunk_ids:
                 if not chunk_id or not chunk_id.startswith("chunk-"):
@@ -79,12 +81,57 @@ class GraphService:
                 try:
                     chunk_data = await lightrag.text_chunks.get_by_id(chunk_id)
                     if chunk_data:
-                        chunks_info.append({
+                        file_path = chunk_data.get("file_path", "")
+                        chunk_info = {
                             "chunk_id": chunk_id,
-                            "file_path": chunk_data.get("file_path", ""),
+                            "file_path": file_path,
                             "full_doc_id": chunk_data.get("full_doc_id", ""),
                             "chunk_order_index": chunk_data.get("chunk_order_index", 0),
-                        })
+                        }
+                        
+                        # 尝试从 chunk_data 中获取 page_index 和 file_id
+                        # 1. 先检查 chunk_data 中是否直接存储了
+                        page_index = chunk_data.get("page_index") or chunk_data.get("page_number") or chunk_data.get("slide_number")
+                        
+                        # 2. 从 chunk 内容中解析页面标记和文件ID
+                        chunk_content = chunk_data.get("content", "")
+                        if chunk_content:
+                            import re
+                        # 优先解析完整格式：[FILE:{file_id}][PAGE/SLIDE:{index}]
+                        full_match = re.search(r'\[FILE:([^\]]+)\]\[(?:PAGE|SLIDE):(\d+)\]', chunk_content)
+                        if full_match:
+                            file_id_from_content = full_match.group(1)
+                            page_index = int(full_match.group(2))
+                            # 如果提供了 conversation_id，直接使用从内容中提取的 file_id
+                            if conversation_id:
+                                chunk_info["file_id"] = file_id_from_content
+                        else:
+                            # 兼容旧格式：分别查找 [FILE:{file_id}]、[PAGE:N] 或 [SLIDE:N]
+                            if page_index is None:
+                                page_match = re.search(r'\[PAGE:(\d+)\]', chunk_content)
+                                slide_match = re.search(r'\[SLIDE:(\d+)\]', chunk_content)
+                            if page_match:
+                                page_index = int(page_match.group(1))
+                            elif slide_match:
+                                page_index = int(slide_match.group(1))
+                            
+                            # 如果还没有 file_id，尝试从内容中提取
+                            if conversation_id and not chunk_info.get("file_id"):
+                                file_match = re.search(r'\[FILE:([^\]]+)\]', chunk_content)
+                                if file_match:
+                                    chunk_info["file_id"] = file_match.group(1)
+                    
+                        if page_index is not None:
+                            chunk_info["page_index"] = int(page_index)
+                        
+                        # 如果提供了 conversation_id 且还没有 file_id，尝试从 file_path 解析
+                        if conversation_id and not chunk_info.get("file_id") and file_path and file_path != "unknown_source":
+                            doc_info = self._parse_file_path_to_doc_info(file_path, conversation_id)
+                            if doc_info:
+                                chunk_info["file_id"] = doc_info["file_id"]
+                                chunk_info["filename"] = doc_info["filename"]
+                        
+                        chunks_info.append(chunk_info)
                 except Exception:
                     continue
         except Exception:
@@ -117,7 +164,7 @@ class GraphService:
             # 解析来源信息
             source_documents = []
             if source_id:
-                chunks_info = await self._get_source_chunks_info(lightrag, source_id)
+                chunks_info = await self._get_source_chunks_info(lightrag, source_id, conversation_id)
                 # 从 chunks 中提取唯一的文档信息
                 seen_file_ids = set()
                 for chunk_info in chunks_info:
@@ -359,3 +406,148 @@ class GraphService:
         # 如果是其他类型，转换为字符串
         return str(result)
 
+    async def build_entity_page_mapping(
+        self,
+        conversation_id: str,
+        document_ids: Optional[List[str]] = None
+    ) -> None:
+        """构建实体到页码的映射表
+        
+        扫描该对话下的所有实体 + 所有 page_index JSON，
+        计算实体最相关的 (file_id, page_index)，
+        写入 entity_page_map/{conversation_id}.json
+        
+        Args:
+            conversation_id: 对话ID
+            document_ids: 指定的文档ID列表（可选，如果为None则处理该对话下的所有文档）
+        """
+        import json
+        import re
+        import app.config as config
+        
+        try:
+            print(f"🔄 开始构建实体页码映射: {conversation_id}...")
+            
+            # 1. 获取所有实体
+            entities = await self.get_all_entities(conversation_id)
+            if not entities:
+                print(f"⚠️ 对话 {conversation_id} 没有实体，跳过映射构建")
+                return
+                
+            # 2. 加载页级索引
+            page_index_dir = Path(config.settings.conversations_metadata_dir) / "page_index" / conversation_id
+            if not page_index_dir.exists():
+                print(f"⚠️ 对话 {conversation_id} 没有页级索引目录，跳过映射构建")
+                return
+                
+            all_pages = [] # List[Dict] -> {file_id, page_index, content}
+            
+            # 遍历该对话下的所有文档索引文件
+            for index_file in page_index_dir.glob("*.json"):
+                # 如果指定了 document_ids，则只处理指定的文档
+                doc_id = index_file.stem
+                if document_ids and doc_id not in document_ids:
+                    continue
+                    
+                try:
+                    with open(index_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        file_id = data.get("document_id")
+                        pages = data.get("pages", [])
+                        for page in pages:
+                            all_pages.append({
+                                "file_id": file_id,
+                                "page_index": page.get("page_index"),
+                                "content": page.get("content", "").lower() # 转小写，方便匹配
+                            })
+                except Exception as e:
+                    print(f"❌ 读取索引文件失败: {index_file}, 错误: {e}")
+            
+            if not all_pages:
+                print(f"⚠️ 没有加载到任何页面内容，跳过映射构建")
+                return
+                
+            # 3. 实体匹配
+            entity_page_map = {
+                "conversation_id": conversation_id,
+                "entities": {}
+            }
+            
+            # 预处理实体名称，转小写
+            processed_entities = []
+            for entity in entities:
+                name = entity.get("name", "")
+                if name:
+                    processed_entities.append({
+                        "original_name": name,
+                        "lower_name": name.lower(),
+                        "type": entity.get("type", "")
+                    })
+            
+            # 对每个实体进行搜索
+            for entity in processed_entities:
+                name_lower = entity["lower_name"]
+                original_name = entity["original_name"]
+                
+                candidates = []
+                
+                for page in all_pages:
+                    # 简单匹配：计算实体名称在页面中出现的次数
+                    count = page["content"].count(name_lower)
+                    
+                    if count > 0:
+                        candidates.append({
+                            "file_id": page["file_id"],
+                            "page_index": page["page_index"],
+                            "score": count # 简单使用频次作为分数
+                        })
+                
+                # 如果有匹配结果
+                if candidates:
+                    # 按分数降序排列
+                    candidates.sort(key=lambda x: x["score"], reverse=True)
+                    # 只保留前 5 个候选项
+                    entity_page_map["entities"][original_name] = candidates[:5]
+            
+            # 4. 保存映射表
+            map_dir = Path(config.settings.conversations_metadata_dir) / "entity_page_map"
+            map_dir.mkdir(parents=True, exist_ok=True)
+            map_file = map_dir / f"{conversation_id}.json"
+            
+            with open(map_file, 'w', encoding='utf-8') as f:
+                json.dump(entity_page_map, f, ensure_ascii=False, indent=2)
+                
+            print(f"✅ 实体页码映射构建完成: {map_file}, 包含 {len(entity_page_map['entities'])} 个实体的映射")
+            
+        except Exception as e:
+            print(f"❌ 构建实体页码映射失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def load_entity_page_mapping(
+        self,
+        conversation_id: str
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """读取实体页码映射表
+        
+        Args:
+            conversation_id: 对话ID
+            
+        Returns:
+            实体映射字典 {entity_name: [candidates...]}，如果文件不存在则返回 {}
+        """
+        import json
+        import app.config as config
+        
+        try:
+            map_file = Path(config.settings.conversations_metadata_dir) / "entity_page_map" / f"{conversation_id}.json"
+            
+            if map_file.exists():
+                with open(map_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    return data.get("entities", {})
+            return {}
+            
+        except Exception as e:
+            print(f"❌ 加载实体页码映射失败: {e}")
+            return {}

@@ -73,6 +73,7 @@ backend/*.json
 !backend/package.json
 !backend/package-lock.json
 backend/docs/
+backend/test/
 
 # 根目录文档
 docs/
