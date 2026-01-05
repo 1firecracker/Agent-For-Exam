@@ -1,5 +1,17 @@
 <template>
   <div class="thumbnail-list">
+    <!-- 收起按钮（放在顶部） -->
+    <div class="collapse-header">
+      <el-button
+        size="small"
+        :icon="ArrowLeft"
+        circle
+        @click="handleCollapse"
+        title="收起目录"
+      />
+    </div>
+    
+    <!-- 缩略图列表 -->
     <div
       v-for="slide in slides"
       :key="slide.slide_number"
@@ -13,6 +25,8 @@
 </template>
 
 <script setup>
+import { ArrowLeft } from '@element-plus/icons-vue'
+
 const props = defineProps({
   slides: {
     type: Array,
@@ -23,6 +37,14 @@ const props = defineProps({
     default: 1
   }
 })
+
+// 定义 emit
+const emit = defineEmits(['slide-change', 'toggle-sidebar'])
+
+// 处理收起按钮点击
+const handleCollapse = () => {
+  emit('toggle-sidebar')
+}
 </script>
 
 <style scoped>
@@ -31,6 +53,17 @@ const props = defineProps({
   overflow-y: auto;
   padding: 8px;
   background-color: #f5f5f5;
+  display: flex;
+  flex-direction: column;
+}
+
+.collapse-header {
+  padding: 8px;
+  display: flex;
+  justify-content: flex-end;
+  border-bottom: 1px solid #e4e7ed;
+  margin-bottom: 8px;
+  flex-shrink: 0;
 }
 
 .thumbnail-item {

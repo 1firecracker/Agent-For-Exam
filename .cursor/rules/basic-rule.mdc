@@ -5,3 +5,4 @@ alwaysApply: true
 2. before execute operation , you need to ask more information for details
 3. make the code and project as concise as possible
 4. Do not create useless md document unless the user tell you to do
+5. 生成的文档需要放到相应根目录的docs目录下

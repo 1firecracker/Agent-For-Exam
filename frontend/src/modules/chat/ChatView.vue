@@ -1003,6 +1003,19 @@ const extractReferenceMap = (text) => {
   return refMap
 }
 
+// 从正文提取 [[file_id|page]]（当没有 References 段时用于兜底编号）
+const extractInlineRefList = (text) => {
+  const refs = []
+  if (!text) return refs
+
+  const pattern = /\[\[([^|\]]+)\|([0-9]+)\]\]/g
+  let match
+  while ((match = pattern.exec(text)) !== null) {
+    refs.push({ fileId: match[1], page: parseInt(match[2]) })
+  }
+  return refs
+}
+
 // 解析引用标记并转换为可点击链接
 const parseReferences = (html, originalText = '') => {
   if (!html) return html
@@ -1010,23 +1023,38 @@ const parseReferences = (html, originalText = '') => {
   // 从原始文本中提取引用映射（编号 -> { fileId, page }）
   const refMap = extractReferenceMap(originalText)
   
-  // 先移除原始的 [[file_id|page]] 标记（作为隐藏元数据，不直接展示给用户）
-  let result = html.replace(/\[\[([^|\]]+)\|([0-9]+)\]\]/g, '')
-  
-  // 再处理 [1]、[2] 等编号格式（如果 References 中有对应的文档信息）
-  result = result.replace(/\[(\d+)\]/g, (match, refNum) => {
-    const refInfo = refMap.get(parseInt(refNum))
-    if (refInfo) {
-      return `<span class="reference-link clickable" data-file-id="${refInfo.fileId}" data-page="${refInfo.page}">[${refNum}]</span>`
-    }
-    // 如果没有对应的文档信息，保持原样但添加样式类（不可点击）
-    return `<span class="reference-number">[${refNum}]</span>`
+  // 情况 A：存在 References 段 -> 以 References 的编号映射为准
+  if (refMap.size > 0) {
+    // 先移除原始的 [[file_id|page]] 标记（作为隐藏元数据，不直接展示给用户）
+    let result = html.replace(/\[\[([^|\]]+)\|([0-9]+)\]\]/g, '')
+
+    // 再处理 [1]、[2] 等编号格式（如果 References 中有对应的文档信息）
+    result = result.replace(/\[(\d+)\]/g, (match, refNum) => {
+      const refInfo = refMap.get(parseInt(refNum))
+      if (refInfo) {
+        return `<span class="reference-link clickable" data-file-id="${refInfo.fileId}" data-page="${refInfo.page}">[${refNum}]</span>`
+      }
+      // 如果没有对应的文档信息，保持原样但添加样式类（不可点击）
+      return `<span class="reference-number">[${refNum}]</span>`
+    })
+
+    return result
+  }
+
+  // 情况 B：没有 References 段 -> 将正文里的 [[file_id|page]] 直接替换成可点击 [1][2]...
+  const inlineRefs = extractInlineRefList(originalText)
+  if (!inlineRefs.length) return html
+
+  let idx = 0
+  return html.replace(/\[\[([^|\]]+)\|([0-9]+)\]\]/g, () => {
+    const ref = inlineRefs[idx]
+    idx += 1
+    if (!ref) return ''
+    return `<span class="reference-link clickable" data-file-id="${ref.fileId}" data-page="${ref.page}">[${idx}]</span>`
   })
-  
-  return result
 }
 
-// 跳转到文档指定页码
+// 跳转到文档指定页码（由 PPTViewer 负责切文档 + 加载 + 跳页）
 const jumpToDocumentPage = async (fileId, page) => {
   // 切换到 Documents 标签
   activeTab.value = 'documents'
@@ -1036,24 +1064,18 @@ const jumpToDocumentPage = async (fileId, page) => {
     isPanelCollapsed.value = false
   }
   
-  // 更新选中的文档ID
-  selectedDocumentId.value = fileId
-  
-  // 等待 DOM 更新
+  // 等待 DOM 更新，确保 PPTViewer 已挂载
   await nextTick()
   
-  // 等待 PPTViewer 加载完成并跳转（通过轮询检查）
-  let retryCount = 0
-  const maxRetries = 20
-  const checkAndJump = () => {
-    if (pptViewerRef.value && pptViewerRef.value.jumpToPage) {
-      pptViewerRef.value.jumpToPage(Number(page))
-    } else if (retryCount < maxRetries) {
-      retryCount++
-      setTimeout(checkAndJump, 300)
-    }
+  const viewer = pptViewerRef.value
+  const pageNumber = Number(page)
+  
+  if (viewer && typeof viewer.loadDocumentAndJump === 'function') {
+    viewer.loadDocumentAndJump(fileId, pageNumber)
+  } else if (viewer && typeof viewer.jumpToPage === 'function') {
+    // 兼容旧逻辑：如果没有新的封装方法，则仅在当前文档上跳页
+    viewer.jumpToPage(pageNumber)
   }
-  checkAndJump()
 }
 
 // 格式化消息，识别警告提示并应用斜体样式，移除 think 标签

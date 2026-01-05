@@ -305,7 +305,14 @@ class DocumentService:
 
             # 构建 JSON 数据
             document_info = self.get_document(conversation_id, document_id)
-            filename = document_info.get("filename", Path(file_path).name) if document_info else Path(file_path).name
+            # 优先使用 document_status 中的 filename（真正的原始文件名）
+            # 如果 document_info 不存在或 filename 为空，说明元数据有问题，不应该用 file_path 推导
+            if document_info and document_info.get("filename"):
+                filename = document_info["filename"]
+            else:
+                # 如果 document_info 不存在或 filename 为空，记录警告但使用 file_path 作为 fallback
+                print(f"⚠️ 警告：文档 {document_id[:8]} 的 filename 在 document_status 中不存在或为空，使用 file_path 作为 fallback")
+                filename = Path(file_path).name
             
             page_index_data = {
                 "conversation_id": conversation_id,

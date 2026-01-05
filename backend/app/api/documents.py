@@ -275,7 +275,7 @@ async def get_document_slides(conversation_id: str, file_id: str):
                 slides_data.append(slide_data)
             
             result = {
-                "filename": parsed_data["filename"],
+                "filename": document["filename"],
                 "total_slides": parsed_data["total_pages"],
                 "slides": slides_data
             }
@@ -287,7 +287,7 @@ async def get_document_slides(conversation_id: str, file_id: str):
                 slide["slide_dimensions"] = None
             
             result = {
-                "filename": parsed_data["filename"],
+                "filename": document["filename"],
                 "total_slides": parsed_data["total_slides"],
                 "slides": parsed_data["slides"]
             }
