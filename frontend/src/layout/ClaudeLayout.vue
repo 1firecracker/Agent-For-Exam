@@ -1,39 +1,32 @@
 <template>
-  <div class="claude-layout">
+  <div class="claude-layout" :style="{ '--sidebar-width': isCollapsed ? '48px' : '260px' }">
     <!-- 侧边栏 -->
-    <aside class="sidebar">
+    <aside class="sidebar" :class="{ collapsed: isCollapsed }">
       <div class="sidebar-header">
-        <div class="logo-area">
+        <div class="logo-area" v-show="!isCollapsed">
           <h1 class="app-title">Agent Exam</h1>
         </div>
-        <el-button class="new-chat-btn" @click="goHome">
+        <el-button class="new-chat-btn" @click="goHome" v-show="!isCollapsed">
           <el-icon></el-icon>
           HOME PAGE
         </el-button>
+        <button class="collapse-btn" @click="toggleCollapse" :title="isCollapsed ? '展开侧边栏' : '折叠侧边栏'">
+          <el-icon>
+            <component :is="isCollapsed ? 'ArrowRight' : 'ArrowLeft'" />
+          </el-icon>
+        </button>
       </div>
 
-      <nav class="sidebar-nav">
+      <nav class="sidebar-nav" v-show="!isCollapsed">
         <div class="nav-group">
           <router-link to="/" class="nav-item" active-class="active">
             <el-icon><Collection /></el-icon>
             My Projects
           </router-link>
         </div>
-
-        <div class="nav-group">
-           <div class="group-title">Tools</div>
-           <router-link to="/exam" class="nav-item" active-class="active">
-            <el-icon><EditPen /></el-icon>
-            Exam Generator
-          </router-link>
-           <router-link to="/grading" class="nav-item" active-class="active">
-            <el-icon><Check /></el-icon>
-            Smart Grading
-          </router-link>
-        </div>
       </nav>
 
-      <div class="sidebar-footer">
+      <div class="sidebar-footer" v-show="!isCollapsed">
         <div class="user-profile" @click="$emit('open-settings')">
           <div class="avatar">U</div>
           <div class="info">
@@ -61,14 +54,25 @@
 </template>
 
 <script setup>
+import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, Collection, EditPen, Check } from '@element-plus/icons-vue'
+import { Collection, ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
 
 const router = useRouter()
+const isCollapsed = ref(false)
 
 const goHome = () => {
   router.push('/')
 }
+
+const toggleCollapse = () => {
+  isCollapsed.value = !isCollapsed.value
+}
+
+// 动态设置全局CSS变量，供ChatView使用
+watch(isCollapsed, (collapsed) => {
+  document.documentElement.style.setProperty('--sidebar-width', collapsed ? '48px' : '260px')
+}, { immediate: true })
 </script>
 
 <style scoped>
@@ -88,10 +92,48 @@ const goHome = () => {
   flex-direction: column;
   border-right: 1px solid var(--border-subtle);
   flex-shrink: 0;
+  transition: width 0.3s ease;
+}
+
+.sidebar.collapsed {
+  width: 48px;
 }
 
 .sidebar-header {
   padding: 20px 16px;
+  position: relative;
+}
+
+.collapse-btn {
+  position: absolute;
+  top: 20px;
+  right: 16px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background-color: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+  z-index: 10;
+}
+
+.collapse-btn:hover {
+  background-color: rgba(0, 0, 0, 0.06);
+  color: var(--text-primary);
+}
+
+.collapse-btn .el-icon {
+  font-size: 16px;
+}
+
+.sidebar.collapsed .collapse-btn {
+  right: 10px;
+  top: 16px;
 }
 
 .app-title {

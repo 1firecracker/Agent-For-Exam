@@ -264,7 +264,13 @@ const activeTab = ref('mindmap')
 const showGraphModal = ref(false)
 
 // 侧边栏宽度（可拖动调整）
-const sidebarWidth = ref(400)
+// 默认宽度为对话空间的60%
+const getDefaultSidebarWidth = () => {
+  const leftSidebarWidth = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width')) || 260
+  const chatSpaceWidth = window.innerWidth - leftSidebarWidth
+  return Math.floor(chatSpaceWidth * 0.6)
+}
+const sidebarWidth = ref(getDefaultSidebarWidth())
 const isResizing = ref(false)
 const minSidebarWidth = 300
 const maxSidebarWidth = 800
@@ -895,6 +901,11 @@ const handleSaveEdit = async (index) => {
 onMounted(async () => {
   console.log('🚀 ChatView mounted, conversationId:', conversationId)
   
+  // 初始化侧边栏宽度为对话空间的60%
+  const leftSidebarWidth = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width')) || 260
+  const chatSpaceWidth = window.innerWidth - leftSidebarWidth
+  sidebarWidth.value = Math.floor(chatSpaceWidth * 0.6)
+  
   // 确保对话被加载
   if (conversationId && (!convStore.currentConversationId || convStore.currentConversationId !== conversationId)) {
     console.log('🔄 Loading conversation details...')
@@ -1169,14 +1180,15 @@ const formatEnhancedMarkdown = (text) => {
 .chat-workspace {
   position: fixed;
   top: 0;
-  left: 260px; /* 左侧边栏宽度 */
+  left: var(--sidebar-width, 260px); /* 使用CSS变量，默认260px */
   right: 0;
   bottom: 0;
-  width: calc(100vw - 260px); /* 全屏宽度减去侧边栏 */
+  width: calc(100vw - var(--sidebar-width, 260px)); /* 使用CSS变量，默认260px */
   height: 100vh;
   display: flex;
   overflow: hidden;
   z-index: 1;
+  transition: left 0.3s ease, width 0.3s ease; /* 添加过渡动画 */
 }
 
 /* Chat Main Area - 全屏对话区域 */

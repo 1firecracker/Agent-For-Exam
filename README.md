@@ -52,7 +52,6 @@ NLP_project/
 ### 后端
 - Python 3.10+
 - pip
-- Windows 10+（PPTX 渲染需要）
 
 ### 前端
 - Node.js 16+
@@ -63,7 +62,7 @@ NLP_project/
 ### 1. 克隆项目
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/1firecracker/Agent-For-Exam.git
 cd NLP_project
 ```
 
@@ -148,16 +147,9 @@ GITEE_OCR_TOKEN=your-gitee-ocr-token-here  # 必需：Gitee OCR Token
 2. **聊天对话**：用于智能问答和 Agent 模式
 3. **思维导图生成**：用于生成思维导图
 
-每个场景可以独立配置：
-- **服务商**：目前支持硅基流动（https://siliconflow.cn/）
+每个场景可以独立配置：(目前支持硅基流动提供的模型（https://siliconflow.cn/）)
 - **模型**：选择对应的模型（如 DeepSeek-V3.2-Exp、Qwen2.5-VL-7B-Instruct 等）
 - **API Key**：输入对应的 API Key（加密存储，不会明文保存）
-
-**配置特点**：
-- ✅ **加密存储**：API Key 使用 Fernet 对称加密存储，不会明文保存
-- ✅ **立即生效**：配置更新后立即生效，无需重启服务
-- ✅ **独立配置**：三个场景的配置完全独立，可以使用不同的模型和 API Key
-- ✅ **安全可靠**：配置文件存储在 `backend/data/llm_config.json`，已加入 `.gitignore`，不会被提交到版本控制
 
 **首次使用**：
 - 如果未配置 LLM API Key，系统会提示错误
@@ -167,7 +159,7 @@ GITEE_OCR_TOKEN=your-gitee-ocr-token-here  # 必需：Gitee OCR Token
 
 ## 启动应用
 
-### 方式一：一键启动（推荐开发使用）
+### 一键启动
 
 **PowerShell:**
 ```powershell
@@ -177,23 +169,6 @@ GITEE_OCR_TOKEN=your-gitee-ocr-token-here  # 必需：Gitee OCR Token
 这会自动启动：
 - 后端服务：http://localhost:8000
 - 前端应用：http://localhost:5173
-
-### 方式二：分别启动
-
-**启动后端:**
-```bash
-cd backend
-start_server.bat
-# 或
-venv\Scripts\activate.bat
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-**启动前端（新开一个终端）:**
-```bash
-cd frontend
-npm run dev
-```
 
 ## 访问地址
 
@@ -282,25 +257,27 @@ npm run dev
 - **global 模式**: 基于全局知识图谱的关系检索
 - **mix 模式**: 混合多种检索方式，提供最全面的答案（推荐）
 
-### 4. 实时处理监控
-- **分阶段进度**: 显示分块、存储、提取、合并各阶段进度
-- **状态跟踪**: 实时更新文档处理状态（pending/processing/completed/failed）
-- **错误提示**: 详细的错误信息展示，便于问题排查
-
-### 5. 高性能异步架构
+### 4. 高性能异步架构
 - **异步处理**: 文档上传后立即返回，后台异步处理
 - **并发控制**: 可配置的并发数，平衡性能和资源使用
 - **非阻塞 API**: 所有耗时操作均为异步，不阻塞请求
 
-### 6. 灵活的存储方案
-- **开发环境**: 使用 JSON 文件和 GraphML 文件存储（零配置）
-- **生产环境**: 支持 PostgreSQL、Neo4j、MongoDB、Milvus 等专业数据库
-- **数据持久化**: 所有数据自动持久化到磁盘，支持多进程访问
-
-### 7. 教育场景优化
+### 5. 教育场景优化
 - **完整教学闭环**: 文档上传 → 知识抽取 → 试题生成 → 学生答题 → 自动批改 → 学习建议
 - **知识图谱驱动**: 基于知识图谱生成高质量题目
 - **智能质量控制**: 自动检测重复题、语言统一、知识点覆盖
+
+
+### 6. Agent 模式技术说明（简要）
+
+Agent 模式基于 **OpenAI 兼容的 tools / function calling 能力** 实现，通过结构化的工具定义，让后端业务函数可以被大模型“感知”和调用，整体流程如下：
+
+1. **工具注册**：在后端通过 `ToolRegistry` 注册多个工具（如 `generate_mindmap`、`query_knowledge_graph`、`list_documents`），并为每个工具定义名称、描述和参数 JSON Schema。
+2. **暴露给 LLM**：在调用 LLM 的请求中，通过 `tools` 字段将所有可用工具的信息传给模型，并使用 `tool_choice=auto` 让模型根据用户需求自动选择是否调用工具。
+3. **模型决定工具调用**：当模型认为需要调用工具时，会返回结构化的 `tool_calls` 字段（包含要调用的工具名和参数 JSON 字符串），而不是普通自然语言文本。
+4. **后端执行与二次调用**：后端解析 `tool_calls`，执行对应的 Python 处理函数，获得结果后以 `tool` 消息的形式回传给 LLM，随后再次调用 LLM 生成面向用户的自然语言最终回答。
+
+当前 Agent 模式主要围绕考试与教学场景，重点支持 **文档列表获取、知识图谱查询和思维导图生成** 三类工具，后续可以按相同方式扩展新的工具和能力。
 
 ## 技术栈
 
@@ -310,7 +287,6 @@ npm run dev
 - **NetworkX** - 图数据结构存储（GraphML 格式）
 - **pdfplumber / PyMuPDF** - PDF 文档解析
 - **python-pptx** - PPTX 文档解析
-- **Pillow** - 图片处理和渲染
 - **Gitee OCR** - PDF OCR 识别（可选，支持中文识别）
 
 ### 前端
@@ -329,19 +305,3 @@ npm run dev
 - **向量存储**: NanoVectorDB（轻量级向量数据库）
 - **图存储**: NetworkX（GraphML 文件存储）
 - **文档状态**: JSON 文件存储
-
-### LLM 集成
-- 支持 OpenAI 兼容 API（如硅基流动、DeepSeek 等）
-- 支持 Ollama 本地模型
-- 可配置的 Embedding 模型
-
-## Agent 模式技术说明（简要）
-
-Agent 模式基于 **OpenAI 兼容的 tools / function calling 能力** 实现，通过结构化的工具定义，让后端业务函数可以被大模型“感知”和调用，整体流程如下：
-
-1. **工具注册**：在后端通过 `ToolRegistry` 注册多个工具（如 `generate_mindmap`、`query_knowledge_graph`、`list_documents`），并为每个工具定义名称、描述和参数 JSON Schema。
-2. **暴露给 LLM**：在调用 LLM 的请求中，通过 `tools` 字段将所有可用工具的信息传给模型，并使用 `tool_choice=auto` 让模型根据用户需求自动选择是否调用工具。
-3. **模型决定工具调用**：当模型认为需要调用工具时，会返回结构化的 `tool_calls` 字段（包含要调用的工具名和参数 JSON 字符串），而不是普通自然语言文本。
-4. **后端执行与二次调用**：后端解析 `tool_calls`，执行对应的 Python 处理函数，获得结果后以 `tool` 消息的形式回传给 LLM，随后再次调用 LLM 生成面向用户的自然语言最终回答。
-
-当前 Agent 模式主要围绕考试与教学场景，重点支持 **文档列表获取、知识图谱查询和思维导图生成** 三类工具，后续可以按相同方式扩展新的工具和能力。
