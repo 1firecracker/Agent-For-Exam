@@ -1,5 +1,6 @@
 """文件存储管理"""
 import uuid
+from nanoid import generate as nanoid_generate
 import shutil
 from pathlib import Path
 from typing import Optional, Dict
@@ -24,8 +25,8 @@ class FileManager:
         Returns:
             包含文件信息的字典
         """
-        # 生成唯一文件ID
-        file_id = str(uuid.uuid4())
+        # 生成唯一文件ID（使用 NanoID，10字符，比UUID短72%）
+        file_id = nanoid_generate(size=10)
         
         # 获取文件扩展名
         original_path = Path(original_filename)
@@ -131,8 +132,8 @@ class FileManager:
         Returns:
             包含文件信息的字典
         """
-        # 生成唯一文件ID
-        file_id = str(uuid.uuid4())
+        # 生成唯一文件ID（使用 NanoID，10字符，比UUID短72%）
+        file_id = nanoid_generate(size=10)
         
         # 获取文件扩展名
         original_path = Path(original_filename)

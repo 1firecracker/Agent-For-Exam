@@ -16,6 +16,7 @@ requests-toolbelt>=1.0.0
 aiofiles==23.2.1
 
 # LightRAG 核心依赖
+nanoid>=2.0.0
 numpy
 networkx
 pandas>=2.0.0
