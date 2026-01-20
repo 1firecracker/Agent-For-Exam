@@ -63,8 +63,14 @@ async def generate_mindmap_handler(
         conversation = conv_service.get_conversation(conversation_id)
         conversation_title = conversation.get("title", "未命名课程") if conversation else "未命名课程"
         
-        # 获取文档列表
-        all_documents = doc_service.list_documents(conversation_id)
+        # 获取对话的 subject_id
+        subject_id = conversation.get("subject_id") if conversation else None
+        
+        # 获取文档列表（优先使用 subject_id，否则回退到 conversation_id）
+        if subject_id:
+            all_documents = doc_service.list_documents_for_subject(subject_id)
+        else:
+            all_documents = doc_service.list_documents(conversation_id)
         
         if not all_documents:
             yield {
@@ -88,7 +94,12 @@ async def generate_mindmap_handler(
         # 准备文档列表（包含文件路径和文件名）
         doc_list = []
         for doc in documents:
-            file_path = doc_service.file_manager.get_file_path(conversation_id, doc["file_id"])
+            # 优先使用 subject_id 获取文件路径，否则回退到 conversation_id
+            if subject_id:
+                file_path = doc_service.file_manager.get_file_path_for_subject(subject_id, doc["file_id"])
+            else:
+                file_path = doc_service.file_manager.get_file_path(conversation_id, doc["file_id"])
+            
             if file_path and file_path.exists():
                 text = doc_service.document_parser.extract_text(str(file_path), file_id=doc["file_id"])
                 if text:

@@ -83,11 +83,21 @@ async def query_knowledge_graph_handler(
                 "mode": "bypass"
             }
         
+        # 获取对话信息，提取 subject_id
+        from app.services.conversation_service import ConversationService
+        conversation_service = ConversationService()
+        conversation = conversation_service.get_conversation(conversation_id)
+        subject_id = conversation.get("subject_id") if conversation else None
+        
+        # 如果对话有 subject_id，使用 subject_id 来检索知识图谱（因为文档和知识图谱现在基于 subject_id 存储）
+        # 否则回退到使用 conversation_id（向后兼容）
+        rag_id = subject_id if subject_id else conversation_id
+        
         # 执行查询 - 使用 aquery_data 获取原始数据，而不是 LLM 生成的回答
         # 这样 Agent 的 LLM 可以基于原始数据生成更合适的回答
         from app.services.lightrag_service import LightRAGService
         lightrag_service = LightRAGService()
-        lightrag = await lightrag_service.get_lightrag_for_conversation(conversation_id)
+        lightrag = await lightrag_service.get_lightrag_for_conversation(rag_id)
         from lightrag import QueryParam
         param = QueryParam(mode=mode)
         
@@ -118,7 +128,8 @@ async def query_knowledge_graph_handler(
                 result_parts.append(f"低级关键词: {', '.join(low_level_keywords)}")
             
             # 尝试加载实体页码映射表（如果存在）
-            entity_page_map = service.load_entity_page_mapping(conversation_id)
+            # 使用 rag_id（可能是 subject_id 或 conversation_id），方法会自动转换为 subject_id
+            entity_page_map = service.load_entity_page_mapping(rag_id)
             
             # 处理实体，添加 file_id 和 page_index 信息
             enriched_entities = []

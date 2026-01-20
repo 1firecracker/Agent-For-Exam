@@ -148,6 +148,29 @@ class DocumentService:
         with open(status_file, 'w', encoding='utf-8') as f:
             json.dump(status, f, ensure_ascii=False, indent=2)
     
+    def _get_subject_status_file(self, subject_id: str) -> Path:
+        """获取知识库文档状态文件路径"""
+        subject_status_dir = Path(config.settings.conversations_metadata_dir) / "subjects" / subject_id
+        subject_status_dir.mkdir(parents=True, exist_ok=True)
+        return subject_status_dir / "documents.json"
+    
+    def _load_subject_status(self, subject_id: str) -> Dict:
+        """加载知识库文档状态"""
+        status_file = self._get_subject_status_file(subject_id)
+        if status_file.exists():
+            try:
+                with open(status_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                return {"documents": {}}
+        return {"documents": {}}
+    
+    def _save_subject_status(self, subject_id: str, status: Dict):
+        """保存知识库文档状态"""
+        status_file = self._get_subject_status_file(subject_id)
+        with open(status_file, 'w', encoding='utf-8') as f:
+            json.dump(status, f, ensure_ascii=False, indent=2)
+    
     def _validate_file(self, filename: str) -> tuple[bool, Optional[str]]:
         """验证文件类型
         
@@ -619,3 +642,431 @@ class DocumentService:
             print(f"Error deleting document {file_id}: {e}")
             # 即使部分操作失败，也尝试删除文件
             return self.file_manager.delete_file(conversation_id, file_id)
+    
+    # ========== 按 subjectId 操作文档的方法 ==========
+    
+    async def upload_documents_for_subject(self, subject_id: str, files: List[UploadFile]) -> Dict:
+        """上传文档到知识库（按 subjectId 存储）
+        
+        Args:
+            subject_id: 知识库ID
+            files: 文件列表（UploadFile 对象）
+            
+        Returns:
+            上传结果字典
+        """
+        # 检查当前文件数量
+        status = self._load_subject_status(subject_id)
+        current_file_count = len(status.get("documents", {}))
+        
+        if current_file_count + len(files) > config.settings.max_files_per_conversation:
+            raise ValueError(
+                f"知识库已有 {current_file_count} 个文件，再上传 {len(files)} 个将超过限制 "
+                f"({config.settings.max_files_per_conversation} 个)"
+            )
+        
+        uploaded_files = []
+        
+        for file in files:
+            # 验证文件类型
+            is_valid, error_msg = self._validate_file(file.filename)
+            if not is_valid:
+                raise ValueError(error_msg)
+            
+            # 读取文件内容
+            file_content = await file.read()
+            
+            # 验证文件大小
+            is_valid, error_msg = await self._check_file_size(file_content)
+            if not is_valid:
+                raise ValueError(error_msg)
+            
+            # 保存文件（使用 subjectId）
+            file_info = self.file_manager.save_file_for_subject(
+                subject_id=subject_id,
+                file_content=file_content,
+                original_filename=file.filename
+            )
+            
+            # 创建文档记录
+            document_id = file_info["file_id"]
+            now = datetime.utcnow().isoformat() + "Z"
+            
+            document_data = {
+                "file_id": document_id,
+                "subject_id": subject_id,
+                "filename": file.filename,
+                "file_size": file_info["file_size"],
+                "file_extension": file_info["file_extension"],
+                "file_path": file_info["file_path"],
+                "upload_time": now,
+                "status": "pending",
+                "lightrag_track_id": None,
+            }
+            
+            # 更新状态
+            status = self._load_subject_status(subject_id)
+            if "documents" not in status:
+                status["documents"] = {}
+            status["documents"][document_id] = document_data
+            self._save_subject_status(subject_id, status)
+            
+            uploaded_files.append({
+                "file_id": document_id,
+                "filename": file.filename,
+                "file_size": file_info["file_size"],
+                "status": "pending"
+            })
+        
+        return {
+            "subject_id": subject_id,
+            "uploaded_files": uploaded_files,
+            "total_files": len(uploaded_files)
+        }
+    
+    def list_documents_for_subject(self, subject_id: str) -> List[Dict]:
+        """列出知识库的所有文档
+        
+        Args:
+            subject_id: 知识库ID
+            
+        Returns:
+            文档列表
+        """
+        status = self._load_subject_status(subject_id)
+        documents = list(status.get("documents", {}).values())
+        # 按上传时间倒序排列
+        documents.sort(key=lambda x: x.get("upload_time", ""), reverse=True)
+        return documents
+    
+    def get_document_for_subject(self, subject_id: str, file_id: str) -> Optional[Dict]:
+        """获取知识库文档信息
+        
+        Args:
+            subject_id: 知识库ID
+            file_id: 文件ID
+            
+        Returns:
+            文档信息，如果不存在返回 None
+        """
+        status = self._load_subject_status(subject_id)
+        return status.get("documents", {}).get(file_id)
+    
+    async def get_document_status_for_subject(self, subject_id: str, file_id: str) -> Optional[Dict]:
+        """获取知识库文档处理状态
+        
+        Args:
+            subject_id: 知识库ID
+            file_id: 文件ID
+            
+        Returns:
+            文档状态信息，包含进度信息
+        """
+        document = self.get_document_for_subject(subject_id, file_id)
+        if document:
+            status_info = {
+                "file_id": file_id,
+                "status": document.get("status"),
+                "lightrag_track_id": document.get("lightrag_track_id"),
+                "error": document.get("error"),
+                "upload_time": document.get("upload_time"),
+            }
+            
+            # 如果文档正在处理中，尝试获取进度信息
+            if document.get("status") == "processing":
+                try:
+                    progress = await self.lightrag_service.get_processing_progress(doc_id=file_id)
+                    if progress:
+                        status_info["progress"] = progress
+                except Exception:
+                    # 如果获取进度失败，忽略错误
+                    pass
+            
+            return status_info
+        return None
+    
+    async def delete_document_for_subject(self, subject_id: str, file_id: str) -> bool:
+        """删除知识库文档
+        
+        Args:
+            subject_id: 知识库ID
+            file_id: 文件ID
+            
+        Returns:
+            是否删除成功
+        """
+        # 获取文档信息
+        document = self.get_document_for_subject(subject_id, file_id)
+        
+        if not document:
+            return False
+        
+        try:
+            # 1. 从LightRAG中删除文档数据（如果已处理）
+            # 注意：LightRAG 可能需要 conversation_id，这里暂时跳过
+            # 后续可以考虑为每个 subject 维护一个 LightRAG 实例
+            
+            # 2. 清理图片缓存
+            try:
+                from app.utils.image_renderer import ImageRenderer
+                import app.config as config
+                
+                file_ext = document.get("file_extension", "")
+                if file_ext:
+                    # 删除该文件的所有缓存图片
+                    cache_dir = Path(config.settings.image_cache_dir) / file_ext / file_id
+                    if cache_dir.exists():
+                        import shutil
+                        shutil.rmtree(cache_dir, ignore_errors=True)
+            except Exception as e:
+                print(f"Warning: 清理图片缓存失败: {e}")
+            
+            # 3. 删除文件
+            file_deleted = self.file_manager.delete_file_for_subject(subject_id, file_id)
+            
+            # 4. 从状态中删除
+            status = self._load_subject_status(subject_id)
+            if file_id in status.get("documents", {}):
+                del status["documents"][file_id]
+                self._save_subject_status(subject_id, status)
+            
+            return file_deleted
+            
+        except Exception as e:
+            print(f"Error deleting document {file_id} for subject {subject_id}: {e}")
+            # 即使部分操作失败，也尝试删除文件
+            return self.file_manager.delete_file_for_subject(subject_id, file_id)
+    
+    async def process_document_for_subject(self, subject_id: str, document_id: str):
+        """处理知识库文档：解析文本并插入 LightRAG（异步后台任务）
+        
+        注意：LightRAG 当前使用 conversation_id 作为命名空间，
+        这里我们使用 subject_id 作为 LightRAG 的命名空间（如果支持的话）
+        或者为每个 subject 维护一个固定的文档容器对话ID
+        
+        Args:
+            subject_id: 知识库ID
+            document_id: 文档ID
+        """
+        # 获取文档信息
+        document = self.get_document_for_subject(subject_id, document_id)
+        if not document:
+            print(f"❌ 文档不存在: {document_id}")
+            return
+        
+        file_path = document.get("file_path")
+        if not file_path or not Path(file_path).exists():
+            print(f"❌ 文件不存在: {file_path}")
+            status = self._load_subject_status(subject_id)
+            if document_id in status.get("documents", {}):
+                status["documents"][document_id]["status"] = "failed"
+                status["documents"][document_id]["error"] = "文件不存在"
+                self._save_subject_status(subject_id, status)
+            return
+        
+        # 使用信号量控制并发
+        async with _processing_semaphore:
+            # 更新状态为处理中
+            status = self._load_subject_status(subject_id)
+            if document_id in status.get("documents", {}):
+                status["documents"][document_id]["status"] = "processing"
+                self._save_subject_status(subject_id, status)
+            
+            try:
+                # 解析文档，提取文本（传入 file_id 以嵌入元数据标记）
+                document_text = self.document_parser.extract_text(str(file_path), file_id=document_id)
+                
+                if not document_text or not document_text.strip():
+                    raise ValueError("文档解析后文本内容为空")
+                
+                # 清理 base64 字符串（使用 subject_id 作为命名空间）
+                cleaned_text, base64_map = self._clean_base64_and_save_for_subject(
+                    document_text, subject_id
+                )
+                
+                # 构建页级索引
+                await self.build_page_index_json_for_subject(
+                    subject_id, document_id, file_path
+                )
+                
+                # 插入到 LightRAG（使用 subject_id 作为 conversation_id）
+                # LightRAG 使用 conversation_id 作为命名空间，这里我们使用 subject_id
+                print(f"📊 开始生成知识图谱: {document_id[:8]}...")
+                track_id = await self.lightrag_service.insert_document(
+                    conversation_id=subject_id,  # 使用 subject_id 作为 conversation_id
+                    text=cleaned_text,
+                    doc_id=document_id
+                )
+                
+                # 更新状态为完成
+                status = self._load_subject_status(subject_id)
+                if document_id in status.get("documents", {}):
+                    status["documents"][document_id]["status"] = "completed"
+                    status["documents"][document_id]["lightrag_track_id"] = track_id
+                    self._save_subject_status(subject_id, status)
+                
+                # 构建/更新 实体→页码映射表
+                try:
+                    from app.services.graph_service import GraphService
+                    graph_service = GraphService()
+                    await graph_service.build_entity_page_mapping(subject_id, document_ids=[document_id])
+                except Exception as e:
+                    print(f"⚠️ 实体页码映射更新失败: {e}")
+                
+                print(f"✅ 文档处理完成: {document_id[:8]}...")
+            
+            except Exception as e:
+                # 更新状态为失败
+                status = self._load_subject_status(subject_id)
+                if document_id in status.get("documents", {}):
+                    status["documents"][document_id]["status"] = "failed"
+                    status["documents"][document_id]["error"] = str(e)
+                    self._save_subject_status(subject_id, status)
+                print(f"❌ 文档处理失败: {document_id[:8]}... 错误: {e}")
+                raise
+    
+    def _clean_base64_and_save_for_subject(self, text: str, subject_id: str) -> Tuple[str, Dict[str, str]]:
+        """清理文本中的 base64 字符串，保存到 base_64.json（按 subjectId）
+        
+        Args:
+            text: 原始文本
+            subject_id: 知识库ID
+            
+        Returns:
+            (清理后的文本, base64映射字典 {序号: base64字符串})
+        """
+        # 获取 base64.json 文件路径
+        print("cleaning base64 for subject", "="*70)
+        base_working_dir = Path(config.settings.lightrag_working_dir)
+        base64_file = base_working_dir.parent / subject_id / subject_id / "base_64.json"
+        base64_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # 加载已有的 base64 数据（如果存在）
+        base64_map = {}
+        if base64_file.exists():
+            try:
+                with open(base64_file, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+                    base64_map = existing_data if isinstance(existing_data, dict) else {}
+            except:
+                base64_map = {}
+        
+        # 获取下一个序号
+        existing_indices = [int(k) for k in base64_map.keys() if k.isdigit()]
+        next_index = max(existing_indices, default=0) + 1
+        
+        cleaned_text = text
+        
+        # 处理 <latexit> 标签
+        latexit_pattern = r'<latexit[^>]*>([^<]*)</latexit>'
+        
+        def replace_latexit(match):
+            nonlocal next_index
+            full_match = match.group(0)
+            tag_content = match.group(1).strip()
+            
+            sha1_match = re.search(r'sha1_base64="([^"]+)"', full_match)
+            base64_in_content = re.search(r'[A-Za-z0-9+/=]{50,}', tag_content)
+            
+            if base64_in_content:
+                base64_value = base64_in_content.group(0)
+            elif sha1_match:
+                base64_value = sha1_match.group(1)
+            elif tag_content and len(tag_content) > 20:
+                base64_value = tag_content
+            else:
+                return ""
+            
+            index_str = str(next_index)
+            base64_map[index_str] = base64_value
+            next_index += 1
+            return f"[BASE64_{index_str}]"
+        
+        cleaned_text = re.sub(latexit_pattern, replace_latexit, cleaned_text, flags=re.DOTALL)
+        
+        # 处理独立的 base64 字符串
+        standalone_base64_pattern = r'(?<!\[BASE64_)[A-Za-z0-9+/=]{50,}(?!\])'
+        
+        def replace_standalone(match):
+            nonlocal next_index
+            base64_str = match.group(0)
+            if re.match(r'^[A-Za-z0-9+/=]+$', base64_str):
+                index_str = str(next_index)
+                base64_map[index_str] = base64_str
+                next_index += 1
+                return f"[BASE64_{index_str}]"
+            return base64_str
+        
+        cleaned_text = re.sub(standalone_base64_pattern, replace_standalone, cleaned_text)
+        
+        # 保存 base64 映射
+        if base64_map:
+            with open(base64_file, 'w', encoding='utf-8') as f:
+                json.dump(base64_map, f, ensure_ascii=False, indent=2)
+        
+        return cleaned_text, base64_map
+    
+    async def build_page_index_json_for_subject(
+        self,
+        subject_id: str,
+        document_id: str,
+        file_path: str
+    ) -> None:
+        """解析指定文档，构建并保存 page_index JSON（按 subjectId）
+        
+        Args:
+            subject_id: 知识库ID
+            document_id: 文档ID
+            file_path: 文件路径
+        """
+        try:
+            print(f"📖 开始构建页级索引: {document_id[:8]}...")
+            
+            # 确定文件类型
+            file_ext = Path(file_path).suffix.lower()
+            pages = []
+            
+            if file_ext == '.pdf':
+                from app.utils.pdf_parser import PDFParser
+                parser = PDFParser()
+                pages = parser.extract_pages(file_path, file_id=document_id)
+            elif file_ext in ['.ppt', '.pptx']:
+                from app.utils.ppt_parser import PPTParser
+                parser = PPTParser()
+                pages = parser.extract_pages(file_path, file_id=document_id)
+            else:
+                print(f"⚠️ 不支持构建页级索引的文件类型: {file_ext}")
+                return
+
+            if not pages:
+                print(f"⚠️ 文档 {document_id[:8]} 未提取到任何页面内容")
+                return
+
+            # 构建 JSON 数据
+            document_info = self.get_document_for_subject(subject_id, document_id)
+            if document_info and document_info.get("filename"):
+                filename = document_info["filename"]
+            else:
+                filename = Path(file_path).name
+            
+            page_index_data = {
+                "subject_id": subject_id,
+                "document_id": document_id,
+                "filename": filename,
+                "pages": pages
+            }
+            
+            # 确定存储路径：uploads/metadata/subjects/{subject_id}/page_index/{document_id}.json
+            page_index_dir = Path(config.settings.conversations_metadata_dir) / "subjects" / subject_id / "page_index"
+            page_index_dir.mkdir(parents=True, exist_ok=True)
+            
+            page_index_file = page_index_dir / f"{document_id}.json"
+            
+            # 写入文件
+            with open(page_index_file, 'w', encoding='utf-8') as f:
+                json.dump(page_index_data, f, ensure_ascii=False, indent=2)
+                
+            print(f"✅ 页级索引构建完成: {page_index_file}")
+            
+        except Exception as e:
+            print(f"❌ 构建页级索引失败: {document_id[:8]}... 错误: {e}")

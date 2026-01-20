@@ -16,11 +16,15 @@ const router = createRouter({
       component: SubjectDocsView
     },
     {
-      path: '/chat/:id',
+      path: '/subject/:subjectId/chat/:conversationId',
       name: 'chat',
       component: () => import('../modules/chat/ChatView.vue')
     },
-    
+    {
+      path: '/chat/:id',
+      name: 'chat-legacy',
+      component: () => import('../modules/chat/ChatView.vue')
+    }
   ]
 })
 

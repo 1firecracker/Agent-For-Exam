@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.services.graph_service import GraphService
 from app.services.memory_service import MemoryService
+from app.services.conversation_service import ConversationService
 from app.config import get_logger
 
 router = APIRouter(tags=["graph"])
@@ -376,8 +377,14 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
                 newline_text = '\n\n'
                 yield f"{json.dumps({'response': newline_text})}\n"
                 
+                # 获取对话信息，提取 subject_id
+                conversation_service = ConversationService()
+                conversation = conversation_service.get_conversation(conversation_id)
+                subject_id = conversation.get("subject_id") if conversation else None
+                rag_id = subject_id if subject_id else conversation_id
+                
                 # 初始化 LightRAG（仅用于 bypass 模式，无需检查知识图谱）
-                lightrag = await service.lightrag_service.get_lightrag_for_conversation(conversation_id)
+                lightrag = await service.lightrag_service.get_lightrag_for_conversation(rag_id)
                 from lightrag import QueryParam
                 
                 # 临时替换 LLM 函数为聊天配置（用于查询）
@@ -461,7 +468,13 @@ async def query_knowledge_graph_stream(conversation_id: str, request: QueryReque
                 yield f"{json.dumps({'error': error_msg})}\n"
                 return
             
-            lightrag = await service.lightrag_service.get_lightrag_for_conversation(conversation_id)
+            # 获取对话信息，提取 subject_id
+            conversation_service = ConversationService()
+            conversation = conversation_service.get_conversation(conversation_id)
+            subject_id = conversation.get("subject_id") if conversation else None
+            rag_id = subject_id if subject_id else conversation_id
+            
+            lightrag = await service.lightrag_service.get_lightrag_for_conversation(rag_id)
             from lightrag import QueryParam
             
             # 如果查询前知识图谱为空，直接使用 bypass 模式，跳过查询

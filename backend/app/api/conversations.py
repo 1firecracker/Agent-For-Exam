@@ -18,6 +18,7 @@ class ConversationUpdateRequest(BaseModel):
 class ConversationResponse(BaseModel):
     conversation_id: str
     title: str
+    subject_id: Optional[str] = None
     created_at: str
     updated_at: str
     file_count: int

@@ -35,6 +35,7 @@
 from typing import Dict, Any
 from app.services.agent.tool_registry import ToolDefinition, ToolParameter
 from app.services.document_service import DocumentService
+from app.services.conversation_service import ConversationService
 
 
 async def list_documents_handler(
@@ -50,9 +51,18 @@ async def list_documents_handler(
     """
     try:
         doc_service = DocumentService()
+        conversation_service = ConversationService()
         
-        # 获取文档列表
-        documents = doc_service.list_documents(conversation_id)
+        # 获取对话信息，提取 subject_id
+        conversation = conversation_service.get_conversation(conversation_id)
+        subject_id = conversation.get("subject_id") if conversation else None
+        
+        # 如果对话有 subject_id，使用 subject_id 来列出文档（因为文档现在基于 subject_id 存储）
+        # 否则回退到使用 conversation_id（向后兼容）
+        if subject_id:
+            documents = doc_service.list_documents_for_subject(subject_id)
+        else:
+            documents = doc_service.list_documents(conversation_id)
         
         if not documents:
             return {

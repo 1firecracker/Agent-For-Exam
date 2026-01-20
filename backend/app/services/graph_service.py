@@ -270,12 +270,32 @@ class GraphService:
             True 表示有文档，False 表示没有文档
         """
         try:
-            # 方式1：检查对话元数据中的 file_count（最快）
+            # 获取对话信息，提取 subject_id
             conversation = self.conversation_service.get_conversation(conversation_id)
-            if conversation:
-                file_count = conversation.get("file_count", 0)
-                if file_count > 0:
-                    return True
+            if not conversation:
+                return False
+            
+            subject_id = conversation.get("subject_id")
+            
+            # 如果对话有 subject_id，检查 subject 的文档（因为文档现在基于 subject_id 存储）
+            if subject_id:
+                # 检查 subject 的文档状态
+                status = self.document_service._load_subject_status(subject_id)
+                documents = status.get("documents", {})
+                if documents:
+                    # 检查是否有已处理的文档
+                    for doc_id, doc_data in documents.items():
+                        doc_status = doc_data.get("status", "")
+                        # 如果文档状态是 completed 或 processing，认为有文档
+                        if doc_status in ["completed", "processing"]:
+                            return True
+                return False
+            
+            # 回退到旧的 conversation_id 方式（向后兼容）
+            # 方式1：检查对话元数据中的 file_count（最快）
+            file_count = conversation.get("file_count", 0)
+            if file_count > 0:
+                return True
             
             # 方式2：检查文档状态文件（更准确，但稍慢）
             status = self.document_service._load_status(conversation_id)
@@ -392,12 +412,20 @@ class GraphService:
         Returns:
             查询结果（文本）
         """
+        # 获取对话信息，提取 subject_id
+        conversation = self.conversation_service.get_conversation(conversation_id)
+        subject_id = conversation.get("subject_id") if conversation else None
+        
+        # 如果对话有 subject_id，使用 subject_id 来检索知识图谱（因为文档和知识图谱现在基于 subject_id 存储）
+        # 否则回退到使用 conversation_id（向后兼容）
+        rag_id = subject_id if subject_id else conversation_id
+        
         # 获取历史对话（减少到3轮，并限制单条消息长度）
         history = []
         if use_history:
             history = self.memory_service.get_recent_history(conversation_id, max_turns=3, max_tokens_per_message=1000)
         
-        result = await self.lightrag_service.query(conversation_id, query, mode=mode, conversation_history=history)
+        result = await self.lightrag_service.query(rag_id, query, mode=mode, conversation_history=history)
         
         # 如果结果是字符串，直接返回
         if isinstance(result, str):
@@ -408,37 +436,52 @@ class GraphService:
 
     async def build_entity_page_mapping(
         self,
-        conversation_id: str,
+        target_id: str,
         document_ids: Optional[List[str]] = None
     ) -> None:
         """构建实体到页码的映射表
         
-        扫描该对话下的所有实体 + 所有 page_index JSON，
+        扫描该知识库下的所有实体 + 所有 page_index JSON，
         计算实体最相关的 (file_id, page_index)，
-        写入 entity_page_map/{conversation_id}.json
+        写入 entity_page_map/{subject_id}.json
         
         Args:
-            conversation_id: 对话ID
-            document_ids: 指定的文档ID列表（可选，如果为None则处理该对话下的所有文档）
+            target_id: 目标ID（可能是 conversation_id 或 subject_id，会自动转换为 subject_id）
+            document_ids: 指定的文档ID列表（可选，如果为None则处理该知识库下的所有文档）
         """
         import json
         import re
         import app.config as config
         
         try:
-            print(f"🔄 开始构建实体页码映射: {conversation_id}...")
+            # 尝试获取 target_id 对应的 subject_id
+            # 如果 target_id 本身就是 subject_id（用于文档处理），则直接使用
+            # 如果是 conversation_id，则尝试获取其 subject_id
+            subject_id = target_id
+            try:
+                conversation = self.conversation_service.get_conversation(target_id)
+                if conversation and conversation.get("subject_id"):
+                    subject_id = conversation["subject_id"]
+            except Exception:
+                # 如果获取失败，使用原始的 target_id（向后兼容）
+                subject_id = target_id
             
-            # 1. 获取所有实体
-            entities = await self.get_all_entities(conversation_id)
+            print(f"🔄 开始构建实体页码映射: {subject_id}...")
+            
+            # 1. 获取所有实体（使用 subject_id 作为 LightRAG 的命名空间）
+            entities = await self.get_all_entities(subject_id)
             if not entities:
-                print(f"⚠️ 对话 {conversation_id} 没有实体，跳过映射构建")
+                print(f"⚠️ 知识库 {subject_id} 没有实体，跳过映射构建")
                 return
                 
-            # 2. 加载页级索引
-            page_index_dir = Path(config.settings.conversations_metadata_dir) / "page_index" / conversation_id
+            # 2. 加载页级索引（优先使用新路径：subjects/{subject_id}/page_index）
+            page_index_dir = Path(config.settings.conversations_metadata_dir) / "subjects" / subject_id / "page_index"
             if not page_index_dir.exists():
-                print(f"⚠️ 对话 {conversation_id} 没有页级索引目录，跳过映射构建")
-                return
+                # 回退到旧路径：page_index/{conversation_id}
+                page_index_dir = Path(config.settings.conversations_metadata_dir) / "page_index" / target_id
+                if not page_index_dir.exists():
+                    print(f"⚠️ 知识库 {subject_id} 没有页级索引目录，跳过映射构建")
+                    return
                 
             all_pages = [] # List[Dict] -> {file_id, page_index, content}
             
@@ -469,7 +512,7 @@ class GraphService:
                 
             # 3. 实体匹配
             entity_page_map = {
-                "conversation_id": conversation_id,
+                "subject_id": subject_id,
                 "entities": {}
             }
             
@@ -509,10 +552,10 @@ class GraphService:
                     # 只保留前 5 个候选项
                     entity_page_map["entities"][original_name] = candidates[:5]
             
-            # 4. 保存映射表
+            # 4. 保存映射表（使用 subject_id 作为文件名）
             map_dir = Path(config.settings.conversations_metadata_dir) / "entity_page_map"
             map_dir.mkdir(parents=True, exist_ok=True)
-            map_file = map_dir / f"{conversation_id}.json"
+            map_file = map_dir / f"{subject_id}.json"
             
             with open(map_file, 'w', encoding='utf-8') as f:
                 json.dump(entity_page_map, f, ensure_ascii=False, indent=2)
@@ -526,12 +569,12 @@ class GraphService:
 
     def load_entity_page_mapping(
         self,
-        conversation_id: str
+        target_id: str
     ) -> Dict[str, List[Dict[str, Any]]]:
         """读取实体页码映射表
         
         Args:
-            conversation_id: 对话ID
+            target_id: 目标ID（可能是 conversation_id 或 subject_id，会自动转换为 subject_id）
             
         Returns:
             实体映射字典 {entity_name: [candidates...]}，如果文件不存在则返回 {}
@@ -540,7 +583,22 @@ class GraphService:
         import app.config as config
         
         try:
-            map_file = Path(config.settings.conversations_metadata_dir) / "entity_page_map" / f"{conversation_id}.json"
+            # 尝试获取 target_id 对应的 subject_id
+            subject_id = target_id
+            try:
+                conversation = self.conversation_service.get_conversation(target_id)
+                if conversation and conversation.get("subject_id"):
+                    subject_id = conversation["subject_id"]
+            except Exception:
+                # 如果获取失败，使用原始的 target_id（向后兼容）
+                subject_id = target_id
+            
+            # 优先使用 subject_id 作为文件名
+            map_file = Path(config.settings.conversations_metadata_dir) / "entity_page_map" / f"{subject_id}.json"
+            
+            # 如果不存在，尝试使用 target_id（向后兼容）
+            if not map_file.exists() and target_id != subject_id:
+                map_file = Path(config.settings.conversations_metadata_dir) / "entity_page_map" / f"{target_id}.json"
             
             if map_file.exists():
                 with open(map_file, 'r', encoding='utf-8') as f:

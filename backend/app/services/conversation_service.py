@@ -43,7 +43,7 @@ class ConversationService:
         with open(self.metadata_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     
-    def create_conversation(self, title: Optional[str] = None) -> str:
+    def create_conversation(self, title: Optional[str] = None, subject_id: Optional[str] = None) -> str:
         """创建新对话
         
         Args:
@@ -72,6 +72,7 @@ class ConversationService:
         conversation_data = {
             "conversation_id": conversation_id,
             "title": title,
+            "subject_id": subject_id,
             "created_at": now,
             "updated_at": now,
             "file_count": 0,
@@ -135,6 +136,11 @@ class ConversationService:
         unpinned.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
         
         return pinned + unpinned
+
+    def list_conversations_by_subject(self, subject_id: str, status: Optional[str] = None) -> List[Dict]:
+        """按知识库获取对话列表"""
+        conversations = self.list_conversations(status=status)
+        return [c for c in conversations if c.get("subject_id") == subject_id]
     
     def update_conversation(self, conversation_id: str, title: Optional[str] = None, pinned: Optional[bool] = None, **kwargs) -> bool:
         """更新对话信息（重命名、置顶等）

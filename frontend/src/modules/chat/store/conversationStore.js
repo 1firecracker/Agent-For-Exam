@@ -15,6 +15,13 @@ export const useConversationStore = defineStore('conversation', () => {
 
   const conversationCount = computed(() => conversations.value.length)
 
+  const getConversationsBySubject = computed(() => {
+    return (subjectId) => {
+      if (!subjectId) return []
+      return conversations.value.filter(c => c.subject_id === subjectId)
+    }
+  })
+
   async function loadConversations(statusFilter = null) {
     loading.value = true
     error.value = null
@@ -153,6 +160,7 @@ export const useConversationStore = defineStore('conversation', () => {
     error,
     currentConversation,
     conversationCount,
+    getConversationsBySubject,
     loadConversations,
     createConversation,
     loadConversation,

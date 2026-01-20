@@ -1,6 +1,6 @@
 # Agent for Exam
-
-基于 LightRAG 的智能考试助手系统，面向教育场景的知识图谱构建、页面级引用的智能问答、试题生成和自动批改的 Web 应用。支持 PPTX/PDF 文档上传、知识抽取、知识图谱可视化、智能对话、AI模拟试题生成和智能批改功能，并提供基于大模型的智能 Agent 模式，自动编排多种工具完成文档浏览、知识图谱问答和思维导图生成等任务。
+### An AI-Powered Exam Assistant based on LightRAG, Knowledge Graphs, and Multi-Agent Orchestration
+agent for exam是一个基于 LightRAG 的智能考试助手系统，面向教育场景的知识图谱构建、页面级引用的智能问答、试题生成和自动批改的 Web 应用。支持 PPTX/PDF 文档上传、知识抽取、知识图谱可视化、智能对话、AI模拟试题生成和智能批改功能，并提供基于大模型的智能 Agent 模式，自动编排多种工具完成文档浏览、知识图谱问答和思维导图生成等任务。
 
 
 ![Agent for Exam 系统架构图](./exam%20agent.png)

@@ -3,8 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from app.config import settings
-from app.api import conversations, documents, graph, images, exercises, mindmap_routes
+from app.api import conversations, documents, graph, images, mindmap_routes, subjects
 from app.api import settings as settings_api
+from app.api import subject_documents
 from app.services.config_service import config_service
 
 app = FastAPI(
@@ -32,10 +33,11 @@ if data_dir.exists():
 
 # 注册路由
 app.include_router(conversations.router)
+app.include_router(subjects.router)
 app.include_router(documents.router)
+app.include_router(subject_documents.router)
 app.include_router(graph.router)
 app.include_router(images.router)
-app.include_router(exercises.router)
 app.include_router(mindmap_routes.router)
 app.include_router(settings_api.router)
 

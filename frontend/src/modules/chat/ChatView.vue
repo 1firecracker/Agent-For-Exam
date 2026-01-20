@@ -240,7 +240,8 @@ marked.setOptions({
 })
 
 const route = useRoute()
-const conversationId = route.params.id
+const subjectId = computed(() => route.params.subjectId || null)
+const conversationId = computed(() => route.params.conversationId || route.params.id)
 const convStore = useConversationStore()
 const docStore = useDocumentStore()
 const chatStore = useChatStore()
@@ -289,8 +290,8 @@ const pptViewerRef = ref(null)
 
 // 获取当前对话的文档
 const currentDocuments = computed(() => {
-  if (!conversationId) return []
-  return docStore.getDocumentsByConversation(conversationId) || []
+  if (!conversationId.value) return []
+  return docStore.getDocumentsByConversation(conversationId.value) || []
 })
 
 // 监听文档列表变化，自动选择第一个支持的文档（PPTX/PDF）
@@ -331,8 +332,9 @@ const scrollToBottom = () => {
 
 // 加载历史消息
 const loadMessages = async () => {
+  if (!conversationId.value) return
   try {
-    const res = await api.get(`/api/conversations/${conversationId}/messages`)
+    const res = await api.get(`/api/conversations/${conversationId.value}/messages`)
     
     if (res.messages) {
       // 过滤掉 tool 角色的消息，这些消息不应该显示给用户
@@ -413,7 +415,7 @@ const handleSend = async () => {
 
   try {
     // 3. 发起流式请求
-    const response = await fetch(`${BASE_URL}/api/conversations/${conversationId}/query/stream`, {
+    const response = await fetch(`${BASE_URL}/api/conversations/${conversationId.value}/query/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -706,7 +708,7 @@ const handleSend = async () => {
     if (fullContent || finalToolCalls) {
       try {
         await chatStore.saveMessage(
-          conversationId,
+          conversationId.value,
           content, // 用户查询
           fullContent, // AI 回复
           finalToolCalls, // 工具调用
@@ -741,7 +743,7 @@ const handleSend = async () => {
     // 即使出错也尝试保存消息
     try {
       await chatStore.saveMessage(
-        conversationId,
+        conversationId.value,
         content,
         messages.value[aiMessageIndex].content,
         null,
@@ -790,7 +792,7 @@ const handleSaveEdit = async (index) => {
   const newContent = editingContent.value.trim()
   
   // 获取原始消息列表（包含 tool 消息）以找到正确的索引
-  const originalMessages = await api.get(`/api/conversations/${conversationId}/messages`)
+  const originalMessages = await api.get(`/api/conversations/${conversationId.value}/messages`)
   
   if (!originalMessages.messages) {
     console.error('无法获取原始消息列表')
@@ -880,7 +882,7 @@ const handleSaveEdit = async (index) => {
   }
   
   // 调用后端重置历史，保留该索引之前的所有消息
-  await chatService.resetHistory(conversationId, originalIndex)
+  await chatService.resetHistory(conversationId.value, originalIndex)
   
   // 前端截断消息数组
   messages.value = messages.value.slice(0, index)
@@ -898,27 +900,28 @@ const handleSaveEdit = async (index) => {
   })
 }
 
-onMounted(async () => {
-  console.log('🚀 ChatView mounted, conversationId:', conversationId)
+// 初始化加载函数
+const initializeConversation = async () => {
+  const currentConvId = conversationId.value
+  if (!currentConvId) return
   
-  // 初始化侧边栏宽度为对话空间的60%
-  const leftSidebarWidth = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width')) || 260
-  const chatSpaceWidth = window.innerWidth - leftSidebarWidth
-  sidebarWidth.value = Math.floor(chatSpaceWidth * 0.6)
+  console.log('🚀 Initializing conversation:', currentConvId)
   
   // 确保对话被加载
-  if (conversationId && (!convStore.currentConversationId || convStore.currentConversationId !== conversationId)) {
+  if (!convStore.currentConversationId || convStore.currentConversationId !== currentConvId) {
     console.log('🔄 Loading conversation details...')
-    await convStore.loadConversation(conversationId)
-    convStore.selectConversation(conversationId)
+    await convStore.loadConversation(currentConvId)
+    convStore.selectConversation(currentConvId)
   }
   
-  // 加载文档
-  console.log('📂 Loading documents for:', conversationId)
+  // 加载文档（使用 subjectId 优先）
+  console.log('📂 Loading documents...')
   try {
-    await docStore.loadDocuments(conversationId)
-    const docs = docStore.getDocumentsByConversation(conversationId)
-    console.log('✅ Documents loaded:', docs)
+    if (subjectId.value) {
+      // 优先使用 subjectId 加载文档
+      await docStore.loadDocumentsForSubject(subjectId.value)
+      const docs = docStore.getDocumentsBySubject(subjectId.value)
+      console.log('✅ Documents loaded (by subject):', docs)
     
     // 自动选择第一个支持的文档（PPTX 或 PDF）
     if (docs && docs.length > 0) {
@@ -926,15 +929,48 @@ onMounted(async () => {
       const pdfDoc = docs.find(doc => doc.file_extension === 'pdf')
       selectedDocumentId.value = (pptxDoc || pdfDoc)?.file_id || null
       console.log('📄 自动选择文档:', selectedDocumentId.value)
+      }
+    } else {
+      // 回退到旧的 conversationId 方式
+      await docStore.loadDocuments(currentConvId)
+      const docs = docStore.getDocumentsByConversation(currentConvId)
+      console.log('✅ Documents loaded (by conversation):', docs)
+      
+      if (docs && docs.length > 0) {
+        const pptxDoc = docs.find(doc => doc.file_extension === 'pptx')
+        const pdfDoc = docs.find(doc => doc.file_extension === 'pdf')
+        selectedDocumentId.value = (pptxDoc || pdfDoc)?.file_id || null
+        console.log('📄 自动选择文档:', selectedDocumentId.value)
+      }
     }
   } catch (e) {
     console.error('❌ Failed to load documents:', e)
   }
 
-  // 加载历史
+  // 加载历史消息
   console.log('💬 Loading messages...')
   await loadMessages()
+}
+
+onMounted(async () => {
+  // 初始化侧边栏宽度为对话空间的60%
+  const leftSidebarWidth = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width')) || 260
+  const chatSpaceWidth = window.innerWidth - leftSidebarWidth
+  sidebarWidth.value = Math.floor(chatSpaceWidth * 0.6)
+  
+  await initializeConversation()
 })
+
+// 监听路由变化，当 conversationId 改变时重新加载
+watch(() => conversationId.value, async (newConvId, oldConvId) => {
+  if (newConvId && newConvId !== oldConvId) {
+    console.log('🔄 Conversation changed:', oldConvId, '->', newConvId)
+    // 清空当前消息
+    messages.value = []
+    // 重新初始化对话
+    await initializeConversation()
+  }
+}, { immediate: false })
 
 // 拖动调整侧边栏宽度
 const handleResizeStart = (e) => {

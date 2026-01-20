@@ -18,7 +18,7 @@
           @click="startChat"
         >
           <el-icon><ChatLineRound /></el-icon>
-          Start Chatting
+          New Chatting
         </el-button>
       </div>
     </header>
@@ -90,44 +90,53 @@ import { ElMessage } from 'element-plus'
 import { Document, UploadFilled, ChatLineRound } from '@element-plus/icons-vue'
 import { useConversationStore } from '../modules/chat/store/conversationStore'
 import { useDocumentStore } from '../modules/documents/store/documentStore'
+import { useSubjectStore } from '../modules/subjects/store/subjectStore'
+import subjectService from '../modules/subjects/services/subjectService'
 
 const route = useRoute()
 const router = useRouter()
 const convStore = useConversationStore()
 const docStore = useDocumentStore()
+const subjectStore = useSubjectStore()
 
 const subjectId = route.params.id
 
 const currentSubjectName = computed(() => {
-  return convStore.currentConversation?.title || 'this subject'
+  return subjectStore.currentSubject?.name || 'this subject'
 })
 
 const currentDocuments = computed(() => {
-  return docStore.getDocumentsByConversation(subjectId)
+  return subjectId ? docStore.getDocumentsBySubject(subjectId) : []
 })
 
 onMounted(async () => {
   if (subjectId) {
-    // 确保 Conversation 被选中
-    if (!convStore.currentConversationId || convStore.currentConversationId !== subjectId) {
-      await convStore.loadConversation(subjectId)
-      convStore.selectConversation(subjectId)
-    }
-    await docStore.loadDocuments(subjectId)
+    // 加载知识库信息
+    await subjectStore.loadSubjects()
+    subjectStore.selectSubject(subjectId)
+    // 加载该知识库的文档
+    await docStore.loadDocumentsForSubject(subjectId)
   }
 })
 
 // 监听路由变化，如果 ID 变了，重新加载
 watch(() => route.params.id, async (newId) => {
   if (newId) {
-    await convStore.loadConversation(newId)
-    convStore.selectConversation(newId)
-    await docStore.loadDocuments(newId)
+    await subjectStore.loadSubjects()
+    subjectStore.selectSubject(newId)
+    await docStore.loadDocumentsForSubject(newId)
+  } else {
+    docStore.clearDocumentsForSubject(subjectId)
   }
 })
 
-const startChat = () => {
-  router.push(`/chat/${subjectId}`)
+const startChat = async () => {
+  if (!subjectId) return
+  const conv = await subjectService.createConversationForSubject(subjectId)
+  if (!conv || !conv.conversation_id) return
+  await convStore.refreshConversation(conv.conversation_id)
+  convStore.selectConversation(conv.conversation_id)
+  router.push(`/subject/${subjectId}/chat/${conv.conversation_id}`)
 }
 
 const getFileType = (filename) => {
@@ -159,10 +168,14 @@ const handleBeforeUpload = (file) => {
 
 const handleUpload = async (options) => {
   const { file } = options
+  if (!subjectId) {
+    ElMessage.error('Cannot upload: Subject ID is missing.')
+    return
+  }
   try {
-    await docStore.uploadDocuments(subjectId, file)
+    const response = await docStore.uploadDocumentsForSubject(subjectId, file)
     ElMessage.success('Upload started')
-    await docStore.loadDocuments(subjectId)
+    await docStore.loadDocumentsForSubject(subjectId)
   } catch (error) {
     console.error('Upload failed:', error)
     ElMessage.error('Upload failed')
@@ -171,7 +184,8 @@ const handleUpload = async (options) => {
 
 const testGetDocumentStatus = async (fileId) => {
   try {
-    const status = await docStore.getDocumentStatus(subjectId, fileId)
+    if (!subjectId) return
+    const status = await docStore.getDocumentStatusForSubject(subjectId, fileId)
     ElMessage.info(`Current status: ${status.status}`)
   } catch (error) {
     console.error('Get status failed:', error)

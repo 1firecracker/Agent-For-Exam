@@ -43,17 +43,32 @@ class LightRAGService:
         """为指定对话初始化 LightRAG 实例
         
         Args:
-            conversation_id: 对话ID
+            conversation_id: 对话ID（可能是 conversation_id 或 subject_id）
             
         Returns:
             LightRAG 实例
         """
-        # 如果已经初始化，直接返回
-        if conversation_id in self._lightrag_instances and self._initialized_instances.get(conversation_id, False):
-            return self._lightrag_instances[conversation_id]
+        # 尝试获取 conversation_id 对应的 subject_id
+        # 如果 conversation_id 本身就是 subject_id（用于文档处理），则直接使用
+        # 如果是 conversation_id，则尝试获取其 subject_id
+        target_id = conversation_id
+        try:
+            from app.services.conversation_service import ConversationService
+            conv_service = ConversationService()
+            conversation = conv_service.get_conversation(conversation_id)
+            if conversation and conversation.get("subject_id"):
+                target_id = conversation["subject_id"]
+        except Exception:
+            # 如果获取失败，使用原始的 conversation_id（向后兼容）
+            target_id = conversation_id
         
-        # 直接使用 data/<conversation_id> 作为工作目录，知识图谱文件直接保存在此目录下
-        working_dir = Path(config.settings.data_dir) / conversation_id
+        # 如果已经初始化（使用 target_id 作为 key），直接返回
+        if target_id in self._lightrag_instances and self._initialized_instances.get(target_id, False):
+            return self._lightrag_instances[target_id]
+        
+        # 使用 data/<target_id> 作为工作目录（target_id 可能是 subject_id 或 conversation_id）
+        # 知识图谱文件直接保存在此目录下
+        working_dir = Path(config.settings.data_dir) / target_id
         working_dir.mkdir(parents=True, exist_ok=True)
         
         # 配置 LLM 函数
@@ -80,9 +95,14 @@ class LightRAGService:
         await lightrag.initialize_storages()
         await initialize_pipeline_status()
         
-        # 缓存实例
-        self._lightrag_instances[conversation_id] = lightrag
-        self._initialized_instances[conversation_id] = True
+        # 缓存实例：使用 target_id 作为 key（确保同一 subject_id 下的多个 conversation_id 共享同一个实例）
+        # 同时，也使用 conversation_id 作为 key（方便查找）
+        self._lightrag_instances[target_id] = lightrag
+        self._initialized_instances[target_id] = True
+        # 如果 target_id 和 conversation_id 不同，也缓存 conversation_id 的映射
+        if target_id != conversation_id:
+            self._lightrag_instances[conversation_id] = lightrag
+            self._initialized_instances[conversation_id] = True
         
         return lightrag
     

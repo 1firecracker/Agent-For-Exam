@@ -44,6 +44,10 @@ const props = defineProps({
     type: String,
     default: ''
   },
+  subjectId: {
+    type: String,
+    default: ''
+  },
   fileId: {
     type: String,
     default: ''
@@ -60,12 +64,24 @@ const slideViewerRef = ref(null)
 const slideRefs = ref([])
 
 const getSlideImageUrl = (slideNumber) => {
-  if (!props.conversationId || !props.fileId || !slideNumber) return ''
-  return documentService.getSlideImageUrl(
-    props.conversationId,
-    props.fileId,
-    slideNumber
-  )
+  if (!props.fileId || !slideNumber) return ''
+  // 优先使用 subjectId
+  if (props.subjectId) {
+    return documentService.getSlideImageUrlForSubject(
+      props.subjectId,
+      props.fileId,
+      slideNumber
+    )
+  }
+  // 回退到 conversationId
+  if (props.conversationId) {
+    return documentService.getSlideImageUrl(
+      props.conversationId,
+      props.fileId,
+      slideNumber
+    )
+  }
+  return ''
 }
 
 const handleImageLoad = () => {

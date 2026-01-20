@@ -16,7 +16,7 @@
           round
           class="new-subject-btn"
           @click="createNewSubject"
-          :loading="convStore.loading"
+          :loading="subjectStore.loading"
         >
           <el-icon><Plus /></el-icon>
           New Subject
@@ -26,11 +26,11 @@
 
     <!-- 学科列表区域 -->
     <section class="subjects-section">
-      <div v-if="convStore.loading && convStore.conversations.length === 0" class="loading-state">
+      <div v-if="subjectStore.loading && subjectStore.subjects.length === 0" class="loading-state">
         <el-skeleton :rows="3" animated count="3" class="skeleton-card" />
       </div>
 
-      <div v-else-if="convStore.conversations.length === 0" class="empty-state">
+      <div v-else-if="subjectStore.subjects.length === 0" class="empty-state">
         <el-empty description="No subjects yet. Create one to get started." :image-size="160">
           <el-button type="primary" @click="createNewSubject">Create First Subject</el-button>
         </el-empty>
@@ -38,26 +38,39 @@
 
       <div v-else class="subjects-grid">
         <div 
-          v-for="conv in convStore.conversations" 
-          :key="conv.conversation_id" 
+          v-for="subject in subjectStore.subjects" 
+          :key="subject.subject_id" 
           class="subject-card"
-          @click="enterSubject(conv)"
+          @click="enterSubject(subject)"
         >
           <div class="card-icon">
-            {{ getSubjectIcon(conv.title) }}
+            {{ getSubjectIcon(subject.name) }}
           </div>
           
           <div class="card-content">
-            <h3 class="subject-title" :title="conv.title">{{ conv.title }}</h3>
+            <h3 class="subject-title" :title="subject.name">{{ subject.name }}</h3>
             <div class="subject-meta">
-              <el-tag size="small" type="info" effect="plain" round>{{ conv.file_count }} Docs</el-tag>
-              <span class="date">{{ formatDate(conv.created_at) }}</span>
+              <el-tag size="small" type="info" effect="plain" round>0 Docs</el-tag>
+              <span class="date">{{ formatDate(subject.created_at) }}</span>
             </div>
           </div>
 
-          <div class="card-actions">
-            <el-button circle size="small" :icon="Delete" @click.stop="handleDelete(conv)" class="delete-btn" />
-            <el-icon class="arrow-icon"><ArrowRight /></el-icon>
+          <div class="card-actions" @click.stop>
+            <el-dropdown trigger="click" @command="(cmd) => handleSubjectCommand(cmd, subject)" @click.stop>
+              <el-button link type="info" class="more-btn">
+                <el-icon><MoreFilled /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="rename">
+                    重命名
+                  </el-dropdown-item>
+                  <el-dropdown-item command="delete" divided>
+                    删除
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </div>
       </div>
@@ -69,61 +82,36 @@
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Collection, Plus, ArrowRight, Delete } from '@element-plus/icons-vue'
-import { useConversationStore } from '../modules/chat/store/conversationStore'
+import { Collection, Plus, MoreFilled } from '@element-plus/icons-vue'
+import { useSubjectStore } from '../modules/subjects/store/subjectStore'
 
 const router = useRouter()
-const convStore = useConversationStore()
+const subjectStore = useSubjectStore()
 
 onMounted(async () => {
-  await convStore.loadConversations()
+  await subjectStore.loadSubjects()
 })
 
 const createNewSubject = async () => {
-  try {
-    const { value: title } = await ElMessageBox.prompt('Please enter the subject name', 'New Subject', {
-      confirmButtonText: 'Create',
-      cancelButtonText: 'Cancel',
-      inputPattern: /\S+/,
-      inputErrorMessage: 'Name cannot be empty'
-    })
-    
-    if (title) {
-      const newConv = await convStore.createConversation(title)
-      ElMessage.success('Subject created')
-      enterSubject(newConv)
-    }
-  } catch (e) {
-    // Cancelled or error
+  const { value: title } = await ElMessageBox.prompt('Please enter the subject name', 'New Subject', {
+    confirmButtonText: 'Create',
+    cancelButtonText: 'Cancel',
+    inputPattern: /\S+/,
+    inputErrorMessage: 'Name cannot be empty'
+  }).catch(() => ({ value: null }))
+  
+  if (!title) {
+    return
   }
+
+  const subject = await subjectStore.createSubject(title)
+  ElMessage.success('Subject created')
+  enterSubject(subject)
 }
 
-const enterSubject = (conv) => {
-  // 设置当前会话
-  convStore.selectConversation(conv.conversation_id)
-  // 跳转到文档管理页 (也是该 Subject 的首页)
-  // 假设路由我们稍后会改为 /subject/:id
-  // 目前先暂时跳到 /workspace (文档页)，我们需要确保 DocumentView 能读取 currentConversationId
-  // 或者跳转到我们在 Step 2 定义的新路由
-  router.push(`/subject/${conv.conversation_id}`)
-}
-
-const handleDelete = async (conv) => {
-  try {
-    await ElMessageBox.confirm(
-      `Are you sure you want to delete "${conv.title}"? This will delete all documents and history.`,
-      'Warning',
-      {
-        confirmButtonText: 'Delete',
-        cancelButtonText: 'Cancel',
-        type: 'warning'
-      }
-    )
-    await convStore.deleteConversation(conv.conversation_id)
-    ElMessage.success('Deleted')
-  } catch (e) {
-    // Cancelled
-  }
+const enterSubject = (subject) => {
+  subjectStore.selectSubject(subject.subject_id)
+  router.push(`/subject/${subject.subject_id}`)
 }
 
 const getSubjectIcon = (title) => {
@@ -134,6 +122,48 @@ const getSubjectIcon = (title) => {
 const formatDate = (dateStr) => {
   if (!dateStr) return ''
   return new Date(dateStr).toLocaleDateString()
+}
+
+const handleSubjectCommand = async (action, subject) => {
+  if (action === 'rename') {
+    const { value: newName } = await ElMessageBox.prompt('请输入新的知识库名称', '重命名知识库', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      inputValue: subject.name || '',
+      inputPattern: /\S+/,
+      inputErrorMessage: '名称不能为空'
+    }).catch(() => ({ value: null }))
+    
+    if (!newName) {
+      return
+    }
+    
+    try {
+      await subjectStore.updateSubject(subject.subject_id, newName)
+      ElMessage.success('知识库已重命名')
+    } catch (error) {
+      console.error('重命名失败:', error)
+      ElMessage.error('重命名失败')
+    }
+  } else if (action === 'delete') {
+    await ElMessageBox.confirm(
+      '删除后将无法恢复该知识库及其所有文档、对话和历史记录，确认删除？',
+      '删除知识库',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    ).catch(() => {})
+    
+    try {
+      await subjectStore.deleteSubject(subject.subject_id)
+      ElMessage.success('知识库已删除')
+    } catch (error) {
+      console.error('删除失败:', error)
+      ElMessage.error('删除失败')
+    }
+  }
 }
 </script>
 
@@ -255,18 +285,14 @@ const formatDate = (dateStr) => {
   opacity: 1;
 }
 
-.arrow-icon {
-  font-size: 20px;
+.more-btn {
   color: var(--text-tertiary);
+  padding: 4px;
+  font-size: 18px;
 }
 
-.delete-btn {
-  color: var(--text-tertiary);
-}
-
-.delete-btn:hover {
-  color: #DC2626;
-  background-color: #FEF2F2;
-  border-color: #FECACA;
+.more-btn:hover {
+  color: var(--text-primary);
+  background-color: var(--bg-hover);
 }
 </style>

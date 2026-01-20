@@ -65,6 +65,7 @@
             :current-slide-number="currentSlideNumber"
             :total-slides="slides.length"
             :conversation-id="conversationStore.currentConversationId"
+            :subject-id="currentSubjectId"
             :file-id="selectedFileId"
             :file-extension="currentFileExtension"
             @slide-change="handleSlideChange"
@@ -87,6 +88,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, ArrowLeft, ArrowRight, Connection } from '@element-plus/icons-vue'
 import { useDocumentStore } from '../../store/documentStore'
@@ -102,6 +104,7 @@ const props = defineProps({
   }
 })
 
+const route = useRoute()
 const documentStore = useDocumentStore()
 const conversationStore = useConversationStore()
 
@@ -112,6 +115,15 @@ const collapsed = ref(true)
 const selectedFileId = ref(props.defaultFileId || null)
 const showGraphDialog = ref(false)
 
+// 获取当前 subjectId（从 conversation 或 route）
+const currentSubjectId = computed(() => {
+  if (conversationStore.currentConversation?.subject_id) {
+    return conversationStore.currentConversation.subject_id
+  }
+  // 如果 conversation 没有 subject_id，尝试从 route 获取
+  return route.params.subjectId || null
+})
+
 watch(() => props.defaultFileId, (newFileId) => {
   if (newFileId && newFileId !== selectedFileId.value) {
     selectedFileId.value = newFileId
@@ -120,10 +132,17 @@ watch(() => props.defaultFileId, (newFileId) => {
 }, { immediate: true })
 
 const supportedDocuments = computed(() => {
-  if (!conversationStore.currentConversationId) return []
-  
-  const docs = documentStore.getDocumentsByConversation(conversationStore.currentConversationId)
-  return docs.filter(doc => ['pptx', 'pdf'].includes(doc.file_extension))
+  // 优先使用 subjectId 获取文档
+  if (currentSubjectId.value) {
+    const docs = documentStore.getDocumentsBySubject(currentSubjectId.value)
+    return docs.filter(doc => ['pptx', 'pdf'].includes(doc.file_extension))
+  }
+  // 回退到旧的 conversationId 方式（向后兼容）
+  if (conversationStore.currentConversationId) {
+    const docs = documentStore.getDocumentsByConversation(conversationStore.currentConversationId)
+    return docs.filter(doc => ['pptx', 'pdf'].includes(doc.file_extension))
+  }
+  return []
 })
 
 const currentSlide = computed(() => {
@@ -138,17 +157,31 @@ const currentFileExtension = computed(() => {
 })
 
 const loadSlides = async () => {
-  if (!selectedFileId.value || !conversationStore.currentConversationId) {
+  if (!selectedFileId.value) {
     slides.value = []
     return
   }
 
   loading.value = true
   try {
-    const response = await documentStore.getDocumentSlides(
-      conversationStore.currentConversationId,
-      selectedFileId.value
-    )
+    let response
+    // 优先使用 subjectId
+    if (currentSubjectId.value) {
+      response = await documentStore.getDocumentSlidesForSubject(
+        currentSubjectId.value,
+        selectedFileId.value
+      )
+    } else if (conversationStore.currentConversationId) {
+      // 回退到旧的 conversationId 方式
+      response = await documentStore.getDocumentSlides(
+        conversationStore.currentConversationId,
+        selectedFileId.value
+      )
+    } else {
+      slides.value = []
+      return
+    }
+    
     slides.value = response.slides || []
     
     if (slides.value.length > 0) {
@@ -184,7 +217,7 @@ const jumpToPage = (pageNumber) => {
 }
 
 const loadDocumentAndJump = async (fileId, pageNumber) => {
-  if (!fileId || !conversationStore.currentConversationId) return
+  if (!fileId || (!currentSubjectId.value && !conversationStore.currentConversationId)) return
 
   // 如果是不同文档，先切换文档并加载对应的 slides
   if (fileId !== selectedFileId.value) {
@@ -225,21 +258,28 @@ const toggleSidebar = () => {
   collapsed.value = !collapsed.value
 }
 
+// 监听 conversationId 或 subjectId 变化
 watch(
-  () => conversationStore.currentConversationId,
-  async (newId, oldId) => {
-    if (newId && newId !== oldId) {
+  [() => conversationStore.currentConversationId, currentSubjectId],
+  async ([newConvId, newSubjectId], [oldConvId, oldSubjectId]) => {
+    if ((newConvId && newConvId !== oldConvId) || (newSubjectId && newSubjectId !== oldSubjectId)) {
       selectedFileId.value = null
       slides.value = []
       currentSlideNumber.value = 1
       
-      await documentStore.loadDocuments(newId)
+      // 优先加载 subject 的文档
+      if (newSubjectId) {
+        await documentStore.loadDocumentsForSubject(newSubjectId)
+      } else if (newConvId) {
+        // 回退到旧的 conversationId 方式
+        await documentStore.loadDocuments(newConvId)
+      }
       
       if (supportedDocuments.value.length > 0) {
         selectedFileId.value = supportedDocuments.value[0].file_id
         await loadSlides()
       }
-    } else if (!newId) {
+    } else if (!newConvId && !newSubjectId) {
       selectedFileId.value = null
       slides.value = []
     }
