@@ -506,6 +506,21 @@ class ExamParser:
             q_type = q_type.lower()
         if q_type not in [t.value for t in QuestionType]:
             q_type = "other"
+
+        # 清洗 score (LLM 可能返回 "10%" 或 string)
+        raw_score = q_dict.get("score")
+        cleaned_score = None
+        if raw_score is not None:
+            if isinstance(raw_score, (int, float)):
+                cleaned_score = float(raw_score)
+            elif isinstance(raw_score, str):
+                try:
+                    # 移除 % 和空格
+                    str_score = raw_score.replace('%', '').strip()
+                    cleaned_score = float(str_score)
+                except ValueError:
+                    logger.debug(f"Score 解析失败: {raw_score}")
+                    cleaned_score = None
         
         # 递归处理子问题（最多三层）
         sub_questions = []
@@ -531,7 +546,7 @@ class ExamParser:
             type=QuestionType(q_type),
             content=q_dict.get("content", "").strip(),
             options=q_dict.get("options", []),
-            score=q_dict.get("score"),
+            score=cleaned_score,
             images=[],
             original_text=q_dict.get("content", ""),
             sub_questions=sub_questions,

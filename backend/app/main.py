@@ -15,6 +15,21 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# 配置日志
+import logging
+import sys
+
+# 强制配置基础日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout,
+    force=True  # 强制覆盖 Uvicorn 的默认配置
+)
+
+# 确保 app 命名空间的日志级别为 INFO
+logging.getLogger("app").setLevel(logging.INFO)
+
 # CORS 配置
 app.add_middleware(
     CORSMiddleware,

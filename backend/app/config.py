@@ -123,7 +123,8 @@ def get_logger(name: str) -> logging.Logger:
     file_handler.setFormatter(JsonFormatter())
     logger.addHandler(file_handler)
     logger.setLevel(logging.DEBUG if Settings().debug else logging.INFO)
-    logger.propagate = False
+    # 允许日志向上冒泡，以便 main.py 配置的 StreamHandler 能捕获到
+    logger.propagate = True
     return logger
 
 
