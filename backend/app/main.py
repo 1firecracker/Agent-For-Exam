@@ -6,6 +6,7 @@ from app.config import settings
 from app.api import conversations, documents, graph, images, mindmap_routes, subjects
 from app.api import settings as settings_api
 from app.api import subject_documents
+from app.api import exams
 from app.services.config_service import config_service
 
 app = FastAPI(
@@ -40,13 +41,13 @@ app.include_router(graph.router)
 app.include_router(images.router)
 app.include_router(mindmap_routes.router)
 app.include_router(settings_api.router)
+app.include_router(exams.router)
 
 # 启动时加载配置
 @app.on_event("startup")
 async def startup_event():
     """启动时加载配置"""
     config_service.reload_all_configs()
-    print("✅ 配置服务已加载")
 
 @app.get("/")
 async def root():

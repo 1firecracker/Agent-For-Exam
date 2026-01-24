@@ -37,6 +37,7 @@ from app.services.agent.tool_executor import ToolExecutor
 from app.services.agent.tools.mindmap_tool import MINDMAP_TOOL
 from app.services.agent.tools.query_tool import QUERY_TOOL
 from app.services.agent.tools.list_documents_tool import LIST_DOCUMENTS_TOOL
+from app.services.agent.tools.skill_tools import READ_SKILL_TOOL
 from app.services.lightrag_service import LightRAGService
 from app.services.memory_service import MemoryService
 import app.config as config
@@ -51,31 +52,60 @@ class AgentService:
     def __init__(self):
         self.tool_registry = ToolRegistry()
         self.tool_executor = ToolExecutor(self.tool_registry)
+        
+        # 初始化技能管理器，自动发现所有技能
+        from app.services.agent.skill_manager import SkillManager
+        self.skill_manager = SkillManager()
+        self.skill_manager.discover_skills()
+        
         self._register_default_tools()
     
     def _register_default_tools(self):
         """注册默认工具"""
+        # 核心业务工具
         self.tool_registry.register(MINDMAP_TOOL)
         self.tool_registry.register(QUERY_TOOL)
         self.tool_registry.register(LIST_DOCUMENTS_TOOL)
+        
+        # 技能管理工具（渐进式披露）
+        self.tool_registry.register(READ_SKILL_TOOL)
+        
         logger.info(
             "Agent 服务初始化完成",
             extra={
                 "event": "agent.init",
                 "tool_count": len(self.tool_registry.tools),
+                "skill_count": len(self.skill_manager._registry),
             },
         )
     
     def _build_agent_system_prompt(self) -> str:
-        """构建 Agent 系统提示词"""
+        """构建 Agent 系统提示词
+        
+        自动注入技能元数据（name + description）到 System Prompt，
+        符合 Claude Code 的渐进式披露机制：
+        - Level 1: 元数据自动注入（本方法）
+        - Level 2: 详细说明按需加载（read_skill_instructions 工具）
+        """
+        # 获取工具描述
         tools_description = []
         for tool in self.tool_registry.list_tools():
             tools_description.append(f"- {tool.name}: {tool.description}")
+        
+        # 获取技能元数据（自动注入，无需调用工具）
+        skills_snippet = self.skill_manager.get_system_prompt_snippet()
         
         return f"""你是一个智能助手，可以帮助用户完成各种任务。
 
 你可以使用以下工具：
 {chr(10).join(tools_description)}
+
+{skills_snippet}
+
+**渐进式披露规则**：
+- 上述技能列表仅显示名称和简要描述
+- 如果你需要了解某个技能的详细参数和使用方法，调用 `read_skill_instructions` 工具获取完整说明
+- 对于简单任务可直接使用工具，复杂任务建议先读取技能说明
 
 基本使用规则：
 1. 根据用户的需求，智能选择合适的工具
