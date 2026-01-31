@@ -99,12 +99,26 @@
 
     <!-- ========== 下半部分：历年试卷 (Exams) ========== -->
     <section class="resource-section exams-section">
-      <div class="section-header">
-        <h3 class="section-title">
-          <el-icon><Edit /></el-icon>
-          Exams (历年试卷)
-        </h3>
-        <p class="section-desc">Upload past exam papers for structured analysis</p>
+      <div class="section-header exams-section-header">
+        <div class="section-header-left">
+          <h3 class="section-title">
+            <el-icon><Edit /></el-icon>
+            Exams (历年试卷)
+          </h3>
+          <p class="section-desc">Upload past exam papers for structured analysis</p>
+        </div>
+        <div class="section-header-right">
+          <el-button
+            type="primary"
+            plain
+            round
+            class="exam-analysis-btn"
+            @click="openExamAnalysisDialog"
+          >
+            <el-icon><DataAnalysis /></el-icon>
+            Exam Analysis
+          </el-button>
+        </div>
       </div>
 
       <!-- 上传区域 -->
@@ -190,6 +204,47 @@
       </div>
     </section>
 
+    <!-- 试题分析：勾选试卷弹窗 -->
+    <el-dialog
+      v-model="examAnalysisDialogVisible"
+      title="选择要分析的试卷"
+      width="520px"
+      class="exam-analysis-dialog"
+      :close-on-click-modal="false"
+      @open="onExamAnalysisDialogOpen"
+    >
+      <p class="exam-analysis-dialog-desc">勾选需要参与分析的历年试卷，确认后将创建试题分析专属对话。</p>
+      <div v-if="analyzableExams.length === 0" class="exam-analysis-empty">
+        <el-empty description="暂无已解析完成的试卷，请先上传并解析试卷" :image-size="80" />
+      </div>
+      <div v-else class="exam-analysis-list">
+        <div class="exam-analysis-actions">
+          <el-button link type="primary" @click="selectAllExams">全选</el-button>
+          <el-button link type="primary" @click="deselectAllExams">取消全选</el-button>
+        </div>
+        <el-checkbox-group v-model="selectedExamIds" class="exam-checkbox-group">
+          <div
+            v-for="exam in analyzableExams"
+            :key="exam.exam_id"
+            class="exam-checkbox-item"
+          >
+            <el-checkbox :label="exam.exam_id">
+              <span class="exam-label">{{ exam.title || 'Untitled' }}</span>
+              <span v-if="exam.year" class="exam-year">{{ exam.year }}年</span>
+            </el-checkbox>
+          </div>
+        </el-checkbox-group>
+      </div>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="examAnalysisDialogVisible = false">取消</el-button>
+          <el-button type="primary" :disabled="selectedExamIds.length === 0" @click="confirmExamAnalysis">
+            开始分析
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
     <!-- 试卷详情抽屉 -->
     <el-drawer
       v-model="examDetailDrawerVisible"
@@ -249,7 +304,7 @@
 import { ref, onMounted, computed, watch, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Document, UploadFilled, ChatLineRound, Folder, Edit, More } from '@element-plus/icons-vue'
+import { Document, UploadFilled, ChatLineRound, Folder, Edit, More, DataAnalysis } from '@element-plus/icons-vue'
 import { useConversationStore } from '../modules/chat/store/conversationStore'
 import { useDocumentStore } from '../modules/documents/store/documentStore'
 import { useSubjectStore } from '../modules/subjects/store/subjectStore'
@@ -271,6 +326,13 @@ const subjectId = route.params.id
 // 试卷详情抽屉
 const examDetailDrawerVisible = ref(false)
 const selectedExamDetail = ref(null)
+
+// 试题分析弹窗：勾选试卷
+const examAnalysisDialogVisible = ref(false)
+const selectedExamIds = ref([])
+const analyzableExams = computed(() =>
+  currentExams.value.filter((e) => e.status === 'completed')
+)
 
 const currentSubjectName = computed(() => {
   return subjectStore.currentSubject?.name || 'this subject'
@@ -336,6 +398,38 @@ const startChat = async () => {
   if (!subjectId) return
   const conv = await subjectService.createConversationForSubject(subjectId)
   if (!conv || !conv.conversation_id) return
+  await convStore.refreshConversation(conv.conversation_id)
+  convStore.selectConversation(conv.conversation_id)
+  router.push(`/subject/${subjectId}/chat/${conv.conversation_id}`)
+}
+
+function openExamAnalysisDialog() {
+  examAnalysisDialogVisible.value = true
+}
+
+function onExamAnalysisDialogOpen() {
+  selectedExamIds.value = analyzableExams.value.map((e) => e.exam_id)
+}
+
+function selectAllExams() {
+  selectedExamIds.value = analyzableExams.value.map((e) => e.exam_id)
+}
+
+function deselectAllExams() {
+  selectedExamIds.value = []
+}
+
+async function confirmExamAnalysis() {
+  if (!subjectId || selectedExamIds.value.length === 0) {
+    ElMessage.warning('请至少选择一份试卷')
+    return
+  }
+  const conv = await subjectService.createConversationForSubject(subjectId, '试题分析', {
+    conversation_type: 'exam_analysis',
+    selected_exam_ids: selectedExamIds.value
+  })
+  if (!conv || !conv.conversation_id) return
+  examAnalysisDialogVisible.value = false
   await convStore.refreshConversation(conv.conversation_id)
   convStore.selectConversation(conv.conversation_id)
   router.push(`/subject/${subjectId}/chat/${conv.conversation_id}`)
@@ -603,6 +697,61 @@ const formatContent = (content, examId) => {
 
 .section-header {
   margin-bottom: 16px;
+}
+
+.exams-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.section-header-left {
+  flex: 1;
+}
+
+.section-header-right {
+  flex-shrink: 0;
+}
+
+/* 试题分析弹窗 */
+.exam-analysis-dialog-desc {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0 0 16px 0;
+}
+.exam-analysis-empty {
+  padding: 24px 0;
+}
+.exam-analysis-list {
+  max-height: 360px;
+  overflow-y: auto;
+}
+.exam-analysis-actions {
+  margin-bottom: 12px;
+}
+.exam-analysis-actions .el-button + .el-button {
+  margin-left: 12px;
+}
+.exam-checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.exam-checkbox-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+.exam-checkbox-item .exam-label {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.exam-checkbox-item .exam-year {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  margin-left: 8px;
 }
 
 .section-title {

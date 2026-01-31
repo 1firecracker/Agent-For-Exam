@@ -43,40 +43,51 @@ class ConversationService:
         with open(self.metadata_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     
-    def create_conversation(self, title: Optional[str] = None, subject_id: Optional[str] = None) -> str:
+    def create_conversation(
+        self,
+        title: Optional[str] = None,
+        subject_id: Optional[str] = None,
+        conversation_type: Optional[str] = None,
+        selected_exam_ids: Optional[List[str]] = None,
+    ) -> str:
         """创建新对话
-        
+
         Args:
             title: 对话标题（可选，如不提供则使用自动编号生成）
-            
+            subject_id: 所属知识库 ID（可选）
+            conversation_type: 对话类型，如 "chat" | "exam_analysis"，默认 "chat"
+            selected_exam_ids: 试题分析时勾选的试卷 ID 列表（可选）
         Returns:
             conversation_id: 对话的唯一ID
         """
         conversation_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat() + "Z"
-        
-        # 加载现有元数据
+        if conversation_type is None:
+            conversation_type = "chat"
+        if selected_exam_ids is None:
+            selected_exam_ids = []
+
         metadata = self._load_metadata()
         if "conversations" not in metadata:
             metadata["conversations"] = {}
         if "next_conversation_number" not in metadata:
             metadata["next_conversation_number"] = 1
-        
-        # 如果没有提供标题，使用自动编号
+
         if title is None:
             next_number = metadata["next_conversation_number"]
             title = f"对话_{next_number}"
-            # 递增编号
             metadata["next_conversation_number"] = next_number + 1
-        
+
         conversation_data = {
             "conversation_id": conversation_id,
             "title": title,
             "subject_id": subject_id,
+            "conversation_type": conversation_type,
+            "selected_exam_ids": selected_exam_ids,
             "created_at": now,
             "updated_at": now,
             "file_count": 0,
-            "status": "active"
+            "status": "active",
         }
         
         # 添加新对话
@@ -103,8 +114,13 @@ class ConversationService:
         """
         metadata = self._load_metadata()
         conversation = metadata.get("conversations", {}).get(conversation_id)
-        if conversation and "pinned" not in conversation:
-            conversation["pinned"] = False
+        if conversation:
+            if "pinned" not in conversation:
+                conversation["pinned"] = False
+            if "conversation_type" not in conversation:
+                conversation["conversation_type"] = "chat"
+            if "selected_exam_ids" not in conversation:
+                conversation["selected_exam_ids"] = []
         return conversation
     
     def list_conversations(self, status: Optional[str] = None) -> List[Dict]:
@@ -119,10 +135,13 @@ class ConversationService:
         metadata = self._load_metadata()
         conversations = list(metadata.get("conversations", {}).values())
         
-        # 确保每个对话都有 pinned 字段
         for conv in conversations:
             if "pinned" not in conv:
                 conv["pinned"] = False
+            if "conversation_type" not in conv:
+                conv["conversation_type"] = "chat"
+            if "selected_exam_ids" not in conv:
+                conv["selected_exam_ids"] = []
         
         if status:
             conversations = [c for c in conversations if c.get("status") == status]

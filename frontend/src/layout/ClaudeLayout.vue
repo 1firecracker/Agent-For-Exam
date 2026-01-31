@@ -63,9 +63,12 @@
                 v-for="conv in getConversationsBySubject(subject.subject_id)"
                 :key="conv.conversation_id"
                 class="nav-item conversation-item"
-                :class="{ active: conv.conversation_id === currentConversationId }"
+                :class="{ active: conv.conversation_id === currentConversationId, 'exam-analysis': conv.conversation_type === 'exam_analysis' }"
                 @click="enterConversation(subject.subject_id, conv.conversation_id)"
               >
+                <el-icon v-if="conv.conversation_type === 'exam_analysis'" class="conv-type-icon exam-analysis-icon" title="试题分析">
+                  <DataAnalysis />
+                </el-icon>
                 <span class="conversation-title">
                   {{ conv.title }}
                 </span>
@@ -123,7 +126,7 @@
 import { ref, watch, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
-import { Collection, ArrowLeft, ArrowRight, ArrowDown, MoreFilled } from '@element-plus/icons-vue'
+import { Collection, ArrowLeft, ArrowRight, ArrowDown, MoreFilled, DataAnalysis } from '@element-plus/icons-vue'
 import { useSubjectStore } from '../modules/subjects/store/subjectStore'
 import { useConversationStore } from '../modules/chat/store/conversationStore'
 
@@ -455,6 +458,8 @@ watch(
   font-size: 13px;
   height: 32px;
   padding-left: 28px;
+  display: flex;
+  align-items: center;
 }
 
 .conversation-item.active {
@@ -462,10 +467,23 @@ watch(
   color: var(--color-accent);
 }
 
+.conversation-item .conv-type-icon {
+  margin-right: 6px;
+  font-size: 14px;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.conversation-item.exam-analysis .exam-analysis-icon {
+  color: var(--color-accent);
+}
+
 .conversation-title {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
 }
 
 .conversation-more {

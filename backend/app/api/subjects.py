@@ -58,6 +58,8 @@ async def get_subject(subject_id: str) -> SubjectResponse:
 
 class SubjectConversationCreateRequest(BaseModel):
     title: Optional[str] = None
+    conversation_type: Optional[str] = None
+    selected_exam_ids: Optional[List[str]] = None
 
 
 @router.get(
@@ -100,7 +102,12 @@ async def create_subject_conversation(
         )
 
     service = ConversationService()
-    conversation_id = service.create_conversation(title=request.title, subject_id=subject_id)
+    conversation_id = service.create_conversation(
+        title=request.title,
+        subject_id=subject_id,
+        conversation_type=request.conversation_type,
+        selected_exam_ids=request.selected_exam_ids,
+    )
     conversation = service.get_conversation(conversation_id)
     if not conversation:
         raise HTTPException(

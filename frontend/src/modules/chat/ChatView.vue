@@ -174,8 +174,15 @@
 
       <div class="sidebar-content" v-show="!isPanelCollapsed">
         <el-tabs v-model="activeTab" class="sidebar-tabs">
-          <!-- 思维导图 Tab -->
-          <el-tab-pane label="Mind Map" name="mindmap">
+          <!-- 试题分析对话：习题解析进度 Tab（默认） -->
+          <el-tab-pane v-if="isExamAnalysisConversation" label="习题解析进度" name="analysis">
+            <div class="tab-content-wrapper">
+              <ExamAnalysisProgress v-if="conversationId" />
+            </div>
+          </el-tab-pane>
+
+          <!-- 普通对话：思维导图 Tab -->
+          <el-tab-pane v-if="!isExamAnalysisConversation" label="Mind Map" name="mindmap">
             <div class="tab-content-wrapper">
                <MindMapViewer v-if="conversationId" />
             </div>
@@ -229,6 +236,7 @@ import { useChatStore } from './store/chatStore'
 import GraphViewer from '../graph/components/GraphViewer.vue'
 import MindMapViewer from '../mindmap/components/MindMapViewer.vue'
 import PPTViewer from '../documents/components/PPTViewer/PPTViewer.vue'
+import ExamAnalysisProgress from './components/ExamAnalysisProgress.vue'
 import ToolCallInline from './components/ToolCallInline.vue'
 import { api, BASE_URL } from '../../services/api'
 import chatService from './services/chatService'
@@ -263,6 +271,13 @@ const editingContent = ref('')
 const isPanelCollapsed = ref(false)
 const activeTab = ref('mindmap')
 const showGraphModal = ref(false)
+
+// 试题分析专属对话：右侧默认显示「习题解析进度」
+const isExamAnalysisConversation = computed(() => convStore.currentConversation?.conversation_type === 'exam_analysis')
+
+watch(isExamAnalysisConversation, (isExam) => {
+  activeTab.value = isExam ? 'analysis' : 'mindmap'
+}, { immediate: true })
 
 // 侧边栏宽度（可拖动调整）
 // 默认宽度为对话空间的60%

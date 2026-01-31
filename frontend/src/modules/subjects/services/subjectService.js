@@ -25,10 +25,11 @@ class SubjectService {
     return response
   }
 
-  async createConversationForSubject(subjectId, title = null) {
-    const response = await api.post(`/api/subjects/${subjectId}/conversations`, {
-      title: title || undefined
-    })
+  async createConversationForSubject(subjectId, title = null, options = {}) {
+    const body = { title: title ?? undefined }
+    if (options.conversation_type) body.conversation_type = options.conversation_type
+    if (options.selected_exam_ids && options.selected_exam_ids.length) body.selected_exam_ids = options.selected_exam_ids
+    const response = await api.post(`/api/subjects/${subjectId}/conversations`, body)
     return response
   }
 

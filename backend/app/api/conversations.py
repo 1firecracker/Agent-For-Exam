@@ -1,6 +1,9 @@
 """对话管理 API"""
+import asyncio
+import json
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.services.conversation_service import ConversationService
@@ -19,6 +22,8 @@ class ConversationResponse(BaseModel):
     conversation_id: str
     title: str
     subject_id: Optional[str] = None
+    conversation_type: str = "chat"
+    selected_exam_ids: Optional[List[str]] = None
     created_at: str
     updated_at: str
     file_count: int
@@ -100,6 +105,59 @@ async def get_conversation(conversation_id: str):
         )
     
     return ConversationResponse(**conversation)
+
+
+@router.get("/{conversation_id}/exam_analysis/trace")
+async def get_exam_analysis_trace(conversation_id: str):
+    """试题分析多智能体轨迹"""
+    from app.services.exam_analysis.trace_storage import TraceStorage
+    data = TraceStorage.get_trace(conversation_id)
+    return {"items": data.get("items", [])}
+
+
+@router.get("/{conversation_id}/exam_analysis/stream")
+async def stream_exam_analysis_events(conversation_id: str):
+    """试题分析 SSE 流：先连接此接口，再 POST /exam_analysis/start，即可实时收到事件"""
+    from app.services.exam_analysis.event_bus import subscribe, unsubscribe, STREAM_END
+    conv = ConversationService().get_conversation(conversation_id)
+    if not conv or conv.get("conversation_type") != "exam_analysis":
+        raise HTTPException(status_code=400, detail="仅试题分析对话可订阅流")
+    queue = await subscribe(conversation_id)
+
+    async def event_stream():
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    if event.get("type") == "stream_end":
+                        break
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                except asyncio.CancelledError:
+                    break
+        finally:
+            await unsubscribe(conversation_id, queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/{conversation_id}/exam_analysis/start", status_code=status.HTTP_202_ACCEPTED)
+async def start_exam_analysis(conversation_id: str, background_tasks: BackgroundTasks):
+    """启动试题分析（后台执行多智能体分析）"""
+    conv = ConversationService().get_conversation(conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    if conv.get("conversation_type") != "exam_analysis":
+        raise HTTPException(status_code=400, detail="仅试题分析对话可启动分析")
+    from app.services.exam_analysis.orchestration import run_analysis
+    background_tasks.add_task(run_analysis, conversation_id)
+    return {"message": "分析已启动", "conversation_id": conversation_id}
 
 
 @router.patch("/{conversation_id}", response_model=ConversationResponse)
