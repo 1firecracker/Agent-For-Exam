@@ -20,4 +20,6 @@ Agent for Exam — AI-powered exam assistant (FastAPI backend + Vue 3 frontend +
 - **Tests**: `pytest` runs from `backend/` with `PYTHONPATH` including LightRAG. Currently only fixtures exist (no test functions), so `pytest` exits with code 5 (no tests collected) — this is expected.
 - **Data directories**: `backend/uploads/`, `backend/data/`, and `backend/logs/` are created at runtime. If they don't exist, the app creates them automatically.
 - **Frontend proxy**: Vite proxies `/api` to `http://localhost:8000`. Backend must be running for API calls to work.
-- **External API dependency**: Full LLM features (chat, KG extraction, mindmap) require a SiliconFlow API key configured via the frontend settings UI. The app starts and serves pages without it, but chat responses will show API key errors.
+- **External API dependency**: Full LLM features (chat, KG extraction, mindmap) require a SiliconFlow API key. The app starts without it, but chat responses will show API key errors.
+- **Programmatic API key config**: If the `SILICONFLOW_API_KEY` env var is available, configure all four scenes (knowledge_graph, chat, mindmap, embedding) via POST to `/api/settings/llm-config/{scene}` with `binding: "siliconflow"` and the API key. This is equivalent to configuring via the frontend Settings UI (⚙️).
+- **siliconcloud vs siliconflow**: These are the same provider. The LightRAG library uses `siliconcloud`; the app uses `siliconflow`. The API normalizes `siliconcloud` → `siliconflow` automatically.
