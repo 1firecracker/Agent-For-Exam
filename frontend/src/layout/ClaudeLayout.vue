@@ -7,8 +7,8 @@
           <h1 class="app-title">Agent Exam</h1>
         </div>
         <el-button class="new-chat-btn" @click="goHome" v-show="!isCollapsed">
-          <el-icon></el-icon>
-          HOME PAGE
+          <el-icon><HomeFilled /></el-icon>
+          Home Page
         </el-button>
         <button class="collapse-btn" @click="toggleCollapse" :title="isCollapsed ? '展开侧边栏' : '折叠侧边栏'">
           <el-icon>
@@ -97,10 +97,10 @@
 
       <div class="sidebar-footer" v-show="!isCollapsed">
         <div class="user-profile" @click="$emit('open-settings')">
-          <div class="avatar">U</div>
+          <div class="avatar user-avatar">U</div>
           <div class="info">
             <span class="name">User</span>
-            <span class="status">Settings</span>
+            <span class="status">点击打开设置</span>
           </div>
         </div>
       </div>
@@ -126,7 +126,7 @@
 import { ref, watch, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
-import { Collection, ArrowLeft, ArrowRight, ArrowDown, MoreFilled, DataAnalysis } from '@element-plus/icons-vue'
+import { Collection, ArrowLeft, ArrowRight, ArrowDown, MoreFilled, DataAnalysis, HomeFilled } from '@element-plus/icons-vue'
 import { useSubjectStore } from '../modules/subjects/store/subjectStore'
 import { useConversationStore } from '../modules/chat/store/conversationStore'
 
@@ -329,26 +329,28 @@ watch(
 
 .new-chat-btn {
   width: 100%;
-  height: 44px;
-  background-color: var(--color-accent);
-  border: none;
-  border-radius: 8px;
-  color: white;
+  height: 40px;
+  background-color: var(--color-accent-light);
+  border: 1.5px solid var(--color-accent);
+  border-radius: 10px;
+  color: var(--color-accent);
   font-family: var(--font-sans);
   font-weight: 500;
   font-size: 14px;
   justify-content: flex-start;
-  padding-left: 16px;
-  transition: background-color 0.2s;
+  padding-left: 14px;
+  transition: all 0.2s;
 }
 
 .new-chat-btn:hover {
-  background-color: var(--color-accent-hover);
+  background-color: var(--color-accent);
+  color: white;
+  border-color: var(--color-accent);
 }
 
 .new-chat-btn :deep(.el-icon) {
   margin-right: 8px;
-  font-size: 18px;
+  font-size: 16px;
 }
 
 /* Navigation */
@@ -487,22 +489,27 @@ watch(
 }
 
 .conversation-more {
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
+  border-radius: 6px;
   border: none;
   background-color: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
   padding: 0;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  opacity: 0;
+  transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+
+.conversation-item:hover .conversation-more {
+  opacity: 1;
 }
 
 .conversation-more:hover {
-  background-color: rgba(0, 0, 0, 0.04);
+  background-color: rgba(0, 0, 0, 0.06);
   color: var(--color-accent);
 }
 
@@ -530,16 +537,22 @@ watch(
   background-color: rgba(0, 0, 0, 0.04);
 }
 
+.user-avatar {
+  background: linear-gradient(135deg, var(--color-accent), var(--color-accent-hover)) !important;
+  color: white !important;
+}
+
 .avatar {
   width: 32px;
   height: 32px;
-  background-color: #E0DDD6;
-  border-radius: 6px;
+  background: linear-gradient(135deg, #E0DDD6, #D4D0C8);
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-family: var(--font-serif);
-  font-weight: 700;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 13px;
   color: var(--text-secondary);
   margin-right: 10px;
 }

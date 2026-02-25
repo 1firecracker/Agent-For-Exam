@@ -912,7 +912,22 @@ onUnmounted(() => {
 
 .header-right {
   display: flex;
-  gap: 8px;
+  gap: 6px;
+}
+
+.header-right :deep(.el-button.is-circle) {
+  width: 32px;
+  height: 32px;
+  font-size: 16px;
+  border-color: var(--border-subtle);
+  color: var(--text-secondary);
+  transition: all 0.2s;
+}
+
+.header-right :deep(.el-button.is-circle:hover) {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background-color: var(--color-accent-light);
 }
 
 .mindmap-container {

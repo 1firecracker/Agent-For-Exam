@@ -138,14 +138,15 @@
             :disabled="!inputMessage.trim() || isLoading || editingMessageIndex !== null"
             @click="handleSend"
           >
-            <el-icon><Position /></el-icon>
+            <el-icon><Top /></el-icon>
           </button>
           <button 
             v-else
             class="stop-btn" 
             @click="handleStop"
+            title="停止生成"
           >
-            <el-icon><Close /></el-icon>
+            <span class="stop-icon"></span>
           </button>
         </div>
         <div class="input-footer">
@@ -227,7 +228,7 @@
 <script setup>
 import { ref, nextTick, onMounted, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Position, ArrowRight, ArrowLeft, Share, Edit, Close, Check } from '@element-plus/icons-vue'
+import { Top, ArrowRight, ArrowLeft, Share, Edit, Close, Check } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import katex from 'katex'
 import { useConversationStore } from './store/conversationStore'
@@ -598,6 +599,7 @@ const handleSend = async () => {
         // 处理错误
         else if (data.error) {
           const errorMsg = data.error
+          const errorHtml = `<span class="error-inline">⚠ ${errorMsg}</span>`
           const lastItem = streamItems[streamItems.length - 1]
           if (lastItem && lastItem.type === 'text') {
             lastItem.content += `\n[Error: ${errorMsg}]`
@@ -1151,6 +1153,9 @@ const formatMessageWithWarning = (text) => {
   // 使用 marked 解析 Markdown
   let html = formatEnhancedMarkdown(content)
   
+  // 处理错误消息
+  html = html.replace(/\[Error:\s*(.*?)\]/g, '<span class="error-inline">⚠ $1</span>')
+
   // 处理警告提示
   html = html.replace(/(⚠️[^：:]*[：:][^<\n]*)/g, '<span class="warning-text">$1</span>')
   
@@ -1306,18 +1311,18 @@ const formatEnhancedMarkdown = (text) => {
 .avatar {
   width: 32px;
   height: 32px;
-  border-radius: 4px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 600;
-  font-size: 14px;
+  font-size: 13px;
   flex-shrink: 0;
 }
 
 .message-row.user .avatar {
-  background-color: #E5E5E5;
-  color: #333;
+  background-color: #E0DDD6;
+  color: var(--text-secondary);
 }
 
 .message-row.assistant .avatar {
@@ -1496,17 +1501,19 @@ const formatEnhancedMarkdown = (text) => {
 
 .input-box {
   background-color: var(--bg-app);
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border: 1.5px solid var(--border-subtle);
+  border-radius: 16px;
   padding: 12px 16px;
   display: flex;
   align-items: flex-end;
   gap: 12px;
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
 }
 
 .input-box:focus-within {
   border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(218, 119, 86, 0.1), 0 1px 4px rgba(0, 0, 0, 0.04);
 }
 
 .chat-input {
@@ -1530,28 +1537,34 @@ const formatEnhancedMarkdown = (text) => {
   background-color: var(--color-accent);
   color: white;
   border: none;
-  border-radius: 8px;
-  width: 32px;
-  height: 32px;
+  border-radius: 10px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   transition: all 0.2s;
+  font-size: 18px;
+}
+
+.send-btn:hover:not(:disabled) {
+  background-color: var(--color-accent-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(218, 119, 86, 0.3);
 }
 
 .send-btn:disabled {
-  background-color: #E5E5E5;
+  background-color: var(--border-subtle);
   cursor: not-allowed;
 }
 
 .stop-btn {
-  background-color: #ff4444;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  width: 32px;
-  height: 32px;
+  background-color: var(--bg-app);
+  border: 2px solid var(--text-tertiary);
+  border-radius: 10px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1560,7 +1573,20 @@ const formatEnhancedMarkdown = (text) => {
 }
 
 .stop-btn:hover {
-  background-color: #cc0000;
+  border-color: var(--color-accent);
+}
+
+.stop-icon {
+  display: block;
+  width: 12px;
+  height: 12px;
+  background-color: var(--text-secondary);
+  border-radius: 2px;
+  transition: background-color 0.2s;
+}
+
+.stop-btn:hover .stop-icon {
+  background-color: var(--color-accent);
 }
 
 .input-footer {
@@ -1738,6 +1764,17 @@ const formatEnhancedMarkdown = (text) => {
 .warning-text {
   font-style: italic;
   color: var(--text-tertiary);
+}
+
+.message-text :deep(.error-inline) {
+  display: inline-block;
+  background-color: #FEF0F0;
+  color: #F56C6C;
+  border: 1px solid #FDE2E2;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
+  margin: 4px 0;
 }
 
 .message-text :deep(.reference-link) {

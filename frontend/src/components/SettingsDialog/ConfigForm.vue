@@ -36,7 +36,7 @@
 
     <!-- 保存按钮 -->
     <el-form-item>
-      <el-button type="primary" @click="handleSave" :loading="saving">
+      <el-button type="primary" @click="handleSave" :loading="saving" style="width: 100%; border-radius: 8px;">
         保存配置
       </el-button>
     </el-form-item>

@@ -45,7 +45,9 @@
     </el-tabs>
     
     <template #footer>
-      <el-button @click="dialogVisible = false">关闭</el-button>
+      <div style="text-align: right;">
+        <el-button round @click="dialogVisible = false">关闭</el-button>
+      </div>
     </template>
   </el-dialog>
 </template>
