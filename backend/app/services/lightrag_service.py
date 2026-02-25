@@ -227,7 +227,7 @@ class LightRAGService:
                     base_url=config.settings.llm_binding_host,
                 )
             )
-        elif config.settings.embedding_binding == "siliconflow":
+        elif config.settings.embedding_binding in ("siliconflow", "siliconcloud"):
             # 统一使用 siliconflow，使用 openai_embed（硅基流动是 OpenAI 兼容的）
             from lightrag.llm.openai import openai_embed
             from app.services.config_service import config_service

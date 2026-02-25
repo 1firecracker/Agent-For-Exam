@@ -77,8 +77,11 @@ async def update_llm_config(scene: str, config_data: LLMConfigUpdate):
             detail=f"无效的场景名称: {scene}，必须是 knowledge_graph, chat, mindmap 或 embedding"
         )
     
+    # 归一化 binding：siliconcloud 是 siliconflow 的旧名称，统一处理
+    if config_data.binding == "siliconcloud":
+        config_data.binding = "siliconflow"
+
     # 验证 binding
-    # 所有场景都支持：openai, siliconflow, ollama
     allowed_bindings = ["openai", "siliconflow", "ollama"]
     if config_data.binding not in allowed_bindings:
         raise HTTPException(
