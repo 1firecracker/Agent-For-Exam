@@ -59,28 +59,23 @@
         </el-button>
 
         <el-button
-          v-if="markdownContent"
           style="width: 100%; margin-top: 8px; margin-left: 0; border-radius: 8px;"
           @click="handleExportPDF"
         >
           导出 PDF
         </el-button>
 
-        <el-divider v-if="markdownContent" />
+        <el-divider />
 
-        <div v-if="markdownContent" class="setting-item">
+        <div class="setting-item">
           <el-switch v-model="editMode" active-text="编辑模式" />
         </div>
       </div>
 
       <!-- 右侧预览/编辑区 -->
       <div class="preview-panel">
-        <div v-if="!markdownContent && !generating" class="empty-preview">
-          <el-empty description="点击左侧「生成 Cheatsheet」按钮" :image-size="100" />
-        </div>
-
         <!-- 编辑模式 -->
-        <div v-else-if="editMode" class="edit-area">
+        <div v-if="editMode" class="edit-area">
           <textarea
             v-model="markdownContent"
             class="markdown-editor"
@@ -124,8 +119,27 @@ const columns = ref(2)
 const includeImages = ref(false)
 const editMode = ref(false)
 const generating = ref(false)
-const markdownContent = ref('')
 const imageRefs = ref([])
+
+function buildPlaceholder() {
+  const langs = [
+    { title: '中文', line: '示例文字。这是一段用于预览排版效果的占位内容，请上传文档后点击生成。' },
+    { title: 'English', line: 'Sample text. This is placeholder content for previewing the layout. Upload documents and click Generate.' },
+    { title: 'Français', line: 'Texte d\'exemple. Ceci est un contenu de substitution pour prévisualiser la mise en page.' },
+    { title: 'Русский', line: 'Пример текста. Это содержимое-заполнитель для предварительного просмотра макета.' },
+  ]
+  let md = '# Cheatsheet Preview\n\n'
+  for (const { title, line } of langs) {
+    md += `## ${title}\n\n`
+    for (let i = 0; i < 50; i++) {
+      md += `- ${line}\n`
+    }
+    md += '\n'
+  }
+  return md
+}
+
+const markdownContent = ref(buildPlaceholder())
 
 const PAGE_DIMS = {
   A4: { w: 210, h: 297 },
@@ -159,9 +173,10 @@ const renderedHtml = computed(() => {
 async function handleGenerate() {
   if (!props.subjectId) return
   generating.value = true
-  markdownContent.value = ''
   imageRefs.value = []
   editMode.value = false
+
+  let llmContent = ''
 
   try {
     const resp = await fetch(`${BASE_URL}/api/subjects/${props.subjectId}/cheatsheet/generate`, {
@@ -173,6 +188,7 @@ async function handleGenerate() {
     const reader = resp.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
+    let hasRealContent = false
 
     while (true) {
       const { done, value } = await reader.read()
@@ -186,11 +202,16 @@ async function handleGenerate() {
         try {
           const data = JSON.parse(line)
           if (data.content) {
-            markdownContent.value += data.content
+            if (!hasRealContent) {
+              markdownContent.value = ''
+              hasRealContent = true
+            }
+            llmContent += data.content
+            markdownContent.value = llmContent
           } else if (data.image_refs) {
             imageRefs.value = data.image_refs
           } else if (data.error) {
-            markdownContent.value += `\n\n> ⚠ 错误: ${data.error}`
+            // 无文档等错误时保留占位内容，不覆盖
           }
         } catch { /* ignore */ }
       }
@@ -198,11 +219,15 @@ async function handleGenerate() {
     if (buffer.trim()) {
       try {
         const data = JSON.parse(buffer)
-        if (data.content) markdownContent.value += data.content
+        if (data.content) {
+          if (!llmContent) markdownContent.value = ''
+          llmContent += data.content
+          markdownContent.value = llmContent
+        }
       } catch { /* ignore */ }
     }
-  } catch (e) {
-    markdownContent.value += `\n\n> ⚠ 请求失败: ${e.message}`
+  } catch {
+    // 请求失败时保留占位内容
   } finally {
     generating.value = false
   }
@@ -290,13 +315,6 @@ function handleClose() {
   display: flex;
   justify-content: center;
   padding: 24px;
-}
-
-.empty-preview {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
 }
 
 .edit-area {
