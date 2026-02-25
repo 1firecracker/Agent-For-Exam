@@ -287,14 +287,23 @@ async function handleGenerate() {
 function handleExportPDF() {
   const w = window.open('', '_blank'); if (!w) return
   const dim = PAGE_DIMS[pageSize.value]
+  const cH = contentHeightMm.value
+  const pagesMarkup = pageHtmls.value.map(html =>
+    `<div class="page-box">${html}</div>`
+  ).join('\n')
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Cheatsheet</title>
 <style>
   @page { size:${dim.w}mm ${dim.h}mm; margin:${marginMm.value}mm; }
-  body { font-family:'Inter','PingFang SC','Microsoft YaHei',sans-serif;
-    font-size:${fontSizePx.value}px; line-height:1.35; color:#222;
-    column-count:${columns.value}; column-gap:12px; margin:0; padding:0; }
+  body { margin:0; padding:0; font-family:'Inter','PingFang SC','Microsoft YaHei',sans-serif;
+    font-size:${fontSizePx.value}px; line-height:1.35; color:#222; }
+  .page-box {
+    column-count:${columns.value}; column-fill:auto; column-gap:12px;
+    height:${cH}mm; overflow:hidden; box-sizing:border-box;
+    break-after:page;
+  }
+  .page-box:last-child { break-after:auto; }
   ${CONTENT_CSS}
-</style></head><body>${renderedHtml.value}</body></html>`)
+</style></head><body>${pagesMarkup}</body></html>`)
   w.document.close(); w.onload = () => { w.print() }
 }
 
