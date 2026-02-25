@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from app.config import settings
-from app.api import conversations, documents, graph, images, mindmap_routes, subjects
+from app.api import conversations, documents, graph, images, mindmap_routes, subjects, cheatsheet
 from app.api import settings as settings_api
 from app.api import subject_documents
 from app.api import exams
@@ -57,6 +57,7 @@ app.include_router(images.router)
 app.include_router(mindmap_routes.router)
 app.include_router(settings_api.router)
 app.include_router(exams.router)
+app.include_router(cheatsheet.router)
 
 # 启动时加载配置
 @app.on_event("startup")

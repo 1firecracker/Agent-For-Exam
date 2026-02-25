@@ -123,6 +123,12 @@
 
       <!-- 底部输入框 -->
       <div class="input-area-wrapper">
+        <div class="input-toolbar">
+          <button class="toolbar-btn" @click="showCheatsheet = true" title="生成 Cheatsheet 速查表">
+            <el-icon><Document /></el-icon>
+            <span>Cheatsheet</span>
+          </button>
+        </div>
         <div class="input-box">
           <textarea 
             v-model="inputMessage"
@@ -209,6 +215,9 @@
       </div>
     </div>
 
+    <!-- Cheatsheet 弹窗 -->
+    <CheatsheetDialog v-model="showCheatsheet" :subject-id="subjectId" />
+
     <!-- 知识图谱弹窗 -->
     <el-dialog
       v-model="showGraphModal"
@@ -228,7 +237,7 @@
 <script setup>
 import { ref, nextTick, onMounted, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Top, ArrowRight, ArrowLeft, Share, Edit, Close, Check } from '@element-plus/icons-vue'
+import { Top, ArrowRight, ArrowLeft, Share, Edit, Close, Check, Document } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import katex from 'katex'
 import { useConversationStore } from './store/conversationStore'
@@ -239,6 +248,7 @@ import MindMapViewer from '../mindmap/components/MindMapViewer.vue'
 import PPTViewer from '../documents/components/PPTViewer/PPTViewer.vue'
 import ExamAnalysisProgress from './components/ExamAnalysisProgress.vue'
 import ToolCallInline from './components/ToolCallInline.vue'
+import CheatsheetDialog from './components/CheatsheetDialog.vue'
 import { api, BASE_URL } from '../../services/api'
 import chatService from './services/chatService'
 
@@ -272,6 +282,7 @@ const editingContent = ref('')
 const isPanelCollapsed = ref(false)
 const activeTab = ref('mindmap')
 const showGraphModal = ref(false)
+const showCheatsheet = ref(false)
 
 // 试题分析专属对话：右侧默认显示「习题解析进度」
 const isExamAnalysisConversation = computed(() => convStore.currentConversation?.conversation_type === 'exam_analysis')
@@ -1489,6 +1500,37 @@ const formatEnhancedMarkdown = (text) => {
 .message-text :deep(li) {
   margin: 0em 0;
   line-height: 1.4;
+}
+
+/* Input Toolbar */
+.input-toolbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-app);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.toolbar-btn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: var(--color-accent-light);
+}
+
+.toolbar-btn .el-icon {
+  font-size: 14px;
 }
 
 /* Input Area */
