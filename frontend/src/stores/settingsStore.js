@@ -62,6 +62,10 @@ export const useSettingsStore = defineStore('settings', () => {
       const result = await settingsService.updateLLMConfig(scene, config)
       // 更新本地配置
       configs.value[scene] = result.config
+      // 如果返回了更新的模型列表，更新本地模型列表
+      if (result.model_lists) {
+        modelLists.value = result.model_lists
+      }
       return result
     } catch (error) {
       console.error('更新配置失败:', error)

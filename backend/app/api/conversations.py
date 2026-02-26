@@ -1,6 +1,7 @@
 """对话管理 API"""
 import asyncio
 import json
+from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -115,6 +116,36 @@ async def get_exam_analysis_trace(conversation_id: str):
     return {"items": data.get("items", [])}
 
 
+@router.get("/{conversation_id}/exam_analysis/report")
+async def get_exam_analysis_report(conversation_id: str):
+    """试题分析报告（第三阶段）。无 mapping 或未生成时返回 404。"""
+    conv = ConversationService().get_conversation(conversation_id)
+
+    from app.services.exam_analysis.trace_storage import TraceStorage
+    from app.services.exam_analysis.report_aggregation import build_report
+    cached = TraceStorage.get_report(conversation_id)
+    if cached:
+        return cached
+    report = build_report(conversation_id)
+
+    TraceStorage.save_report(conversation_id, report)
+    return report
+
+
+@router.post("/{conversation_id}/exam_analysis/report/regenerate")
+async def regenerate_exam_analysis_report(conversation_id: str):
+    """重新生成报告（清除缓存后根据当前 verified_mappings 再算一次）。无 mapping 时返回 404。"""
+    conv = ConversationService().get_conversation(conversation_id)
+    from app.services.exam_analysis.trace_storage import TraceStorage
+    from app.services.exam_analysis.report_aggregation import build_report
+    TraceStorage.delete_report(conversation_id)
+    report = build_report(conversation_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="暂无映射数据，请先完成试题分析")
+    TraceStorage.save_report(conversation_id, report)
+    return report
+
+
 @router.get("/{conversation_id}/exam_analysis/stream")
 async def stream_exam_analysis_events(conversation_id: str):
     """试题分析 SSE 流：先连接此接口，再 POST /exam_analysis/start，即可实时收到事件"""
@@ -129,9 +160,9 @@ async def stream_exam_analysis_events(conversation_id: str):
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                     if event.get("type") == "stream_end":
                         break
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
                     continue
@@ -227,6 +258,19 @@ async def delete_conversation(conversation_id: str):
 
 
 # 消息历史相关API
+class DocMessageRequest(BaseModel):
+    """文档附件消息请求"""
+    type: str  # 'doc-highlight' 或 'doc-image'
+    filename: str
+    page_number: int = Field(..., alias='pageNumber')
+    file_extension: str = Field(..., alias='fileExtension')
+    file_id: str = Field(..., alias='fileId')
+    image_url: Optional[str] = Field(None, alias='imageUrl')  # 仅当 type 为 'doc-image' 时需要
+    base_timestamp: Optional[str] = Field(None, alias='baseTimestamp')  # 基础时间戳（可选），用于确保多个 doc-* 消息按顺序排列
+    
+    class Config:
+        populate_by_name = True  # 允许同时使用字段名和别名
+
 class MessageRequest(BaseModel):
     query: str
     answer: str
@@ -235,10 +279,17 @@ class MessageRequest(BaseModel):
 
 class MessageResponse(BaseModel):
     role: str
-    content: str
-    timestamp: str
+    content: Optional[str] = ""  # 对于 doc-* 消息，content 可以为空
+    timestamp: Optional[str] = None  # 对于 doc-* 消息，timestamp 可以为空
     streamItems: Optional[List[dict]] = None  # 流式输出项（工具调用和文本的混合顺序，可选）
     toolCalls: Optional[List[dict]] = None  # 工具调用信息（向后兼容，可选）
+    # doc-* 消息的额外字段
+    type: Optional[str] = None  # 'doc-highlight' 或 'doc-image'
+    filename: Optional[str] = None
+    pageNumber: Optional[int] = None
+    fileExtension: Optional[str] = None
+    fileId: Optional[str] = None
+    imageUrl: Optional[str] = None  # 仅 doc-image 有
 
 class MessagesResponse(BaseModel):
     messages: List[MessageResponse]
@@ -264,14 +315,39 @@ async def get_messages(conversation_id: str):
         )
     
     messages = service.get_messages(conversation_id)
-    # print(f"📥 [API] 获取到 {len(messages)} 条消息")  # 调试日志已关闭
     
     # 转换字段名：将 stream_items 转换为 streamItems，tool_calls 转换为 toolCalls（前端期望的格式）
     converted_messages = []
     for i, msg in enumerate(messages):
         converted_msg = msg.copy()
         msg_role = converted_msg.get('role', 'unknown')
-        # print(f"📝 [API] 处理消息 {i+1}/{len(messages)}: role={msg_role}, content长度={len(str(converted_msg.get('content', '')))}")  # 调试日志已关闭
+        
+        # 处理 doc-* 类型的消息（文档附件）
+        if converted_msg.get('role') == 'system' and converted_msg.get('type') in ['doc-highlight', 'doc-image']:
+            # doc-* 消息保持原样，不需要转换 tool_calls 和 stream_items
+            # 但需要确保字段名符合前端期望（pageNumber 而不是 page_number）
+            if 'page_number' in converted_msg:
+                converted_msg['pageNumber'] = converted_msg['page_number']
+                del converted_msg['page_number']
+            if 'file_extension' in converted_msg:
+                converted_msg['fileExtension'] = converted_msg['file_extension']
+                del converted_msg['file_extension']
+            if 'file_id' in converted_msg:
+                converted_msg['fileId'] = converted_msg['file_id']
+                del converted_msg['file_id']
+            if 'image_url' in converted_msg:
+                converted_msg['imageUrl'] = converted_msg['image_url']
+                del converted_msg['image_url']
+            # doc-* 消息不需要 streamItems 和 toolCalls
+            converted_msg['streamItems'] = None
+            converted_msg['toolCalls'] = None
+            # 确保有 content 和 timestamp 字段（即使为空）
+            if 'content' not in converted_msg:
+                converted_msg['content'] = ""
+            if 'timestamp' not in converted_msg or not converted_msg.get('timestamp'):
+                converted_msg['timestamp'] = datetime.utcnow().isoformat() + "Z"
+            converted_messages.append(converted_msg)
+            continue
         
         # 如果存在 stream_items，添加 streamItems 别名（前端期望的字段名），并删除原始字段
         if 'stream_items' in converted_msg:
@@ -294,15 +370,56 @@ async def get_messages(conversation_id: str):
             print(f"⚠️ [API] 警告: 消息 {i+1} 缺少 content 字段")
         if 'timestamp' not in converted_msg:
             print(f"⚠️ [API] 警告: 消息 {i+1} 缺少 timestamp 字段")
+            converted_msg['timestamp'] = datetime.utcnow().isoformat() + "Z"
         
         converted_messages.append(converted_msg)
-    
-    # print(f"✅ [API] 转换完成，共 {len(converted_messages)} 条消息")  # 调试日志已关闭
     
     return MessagesResponse(
         messages=[MessageResponse(**msg) for msg in converted_messages]
     )
 
+
+@router.post("/{conversation_id}/messages/doc", status_code=status.HTTP_201_CREATED)
+async def save_doc_message(conversation_id: str, request: DocMessageRequest):
+    """保存文档附件消息到对话历史
+    
+    Args:
+        conversation_id: 对话ID
+        request: 文档附件消息数据
+    """
+    service = ConversationService()
+    
+    conversation = service.get_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"对话 {conversation_id} 不存在"
+        )
+    
+    if request.type not in ["doc-highlight", "doc-image"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"无效的消息类型: {request.type}，必须是 'doc-highlight' 或 'doc-image'"
+        )
+    
+    success = service.add_doc_message(
+        conversation_id,
+        request.type,
+        request.filename,
+        request.page_number,
+        request.file_extension,
+        request.file_id,
+        request.image_url,
+        request.base_timestamp
+    )
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="保存文档消息失败"
+        )
+    
+    return {"status": "success"}
 
 @router.post("/{conversation_id}/messages", status_code=status.HTTP_201_CREATED)
 async def save_message(conversation_id: str, request: MessageRequest):

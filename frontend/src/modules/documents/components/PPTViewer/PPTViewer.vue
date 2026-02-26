@@ -68,7 +68,10 @@
             :subject-id="currentSubjectId"
             :file-id="selectedFileId"
             :file-extension="currentFileExtension"
+            :filename="currentFilename"
             @slide-change="handleSlideChange"
+            @request-load-parsed="handleRequestLoadParsed"
+            @request-load-image="handleRequestLoadImage"
           />
         </div>
       </div>
@@ -103,6 +106,8 @@ const props = defineProps({
     default: null
   }
 })
+
+const emit = defineEmits(['request-load-parsed', 'request-load-image'])
 
 const route = useRoute()
 const documentStore = useDocumentStore()
@@ -154,6 +159,12 @@ const currentFileExtension = computed(() => {
   if (!selectedFileId.value) return null
   const doc = supportedDocuments.value.find(d => d.file_id === selectedFileId.value)
   return doc?.file_extension || null
+})
+
+const currentFilename = computed(() => {
+  if (!selectedFileId.value) return ''
+  const doc = supportedDocuments.value.find(d => d.file_id === selectedFileId.value)
+  return doc?.filename || ''
 })
 
 const loadSlides = async () => {
@@ -256,6 +267,16 @@ const handleRefresh = () => {
 
 const toggleSidebar = () => {
   collapsed.value = !collapsed.value
+}
+
+// 处理"载入解析数据"请求
+const handleRequestLoadParsed = (data) => {
+  emit('request-load-parsed', data)
+}
+
+// 处理"载入图片"请求
+const handleRequestLoadImage = (data) => {
+  emit('request-load-image', data)
 }
 
 // 监听 conversationId 或 subjectId 变化

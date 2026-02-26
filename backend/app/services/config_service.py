@@ -122,6 +122,9 @@ class ConfigService:
                     "model": config.settings.embedding_model or "Qwen/Qwen3-Embedding-0.6B",
                     "host": config.settings.embedding_binding_host or config.settings.llm_binding_host or default_host,
                     "api_key_encrypted": embedding_api_key_encrypted
+                },
+                "custom_models": {
+                    "siliconflow": []  # 用户自定义的模型列表
                 }
             }
             self._save_config()
@@ -198,12 +201,47 @@ class ConfigService:
                 # 如果传入空字符串，保留原有密钥（不更新）
                 pass
         
+        # 如果模型不在默认列表中，添加到自定义模型列表
+        if model and binding:
+            self._add_custom_model(binding, model)
+        
         # 更新缓存并保存
         self._config_cache = config_data
         self._save_config()
         
         # 立即更新全局配置（立即生效）
         self._apply_to_global_config(scene)
+    
+    def _add_custom_model(self, binding: str, model: str):
+        """添加自定义模型到列表
+        
+        Args:
+            binding: 服务商名称
+            model: 模型名称
+        """
+        config_data = self._load_config()
+        
+        # 确保 custom_models 字段存在
+        if "custom_models" not in config_data:
+            config_data["custom_models"] = {}
+        
+        if binding not in config_data["custom_models"]:
+            config_data["custom_models"][binding] = []
+        
+        # 如果模型不在列表中，则添加
+        if model not in config_data["custom_models"][binding]:
+            config_data["custom_models"][binding].append(model)
+            self._config_cache = config_data
+            self._save_config()
+    
+    def get_custom_models(self) -> Dict[str, list]:
+        """获取自定义模型列表
+        
+        Returns:
+            自定义模型字典，key 为 binding，value 为模型列表
+        """
+        config_data = self._load_config()
+        return config_data.get("custom_models", {})
     
     def _apply_to_global_config(self, scene: str):
         """将配置应用到全局 settings（立即生效）"""

@@ -14,57 +14,110 @@
         <div v-else class="message-list">
           <div 
             v-for="(msg, index) in messages" 
+            v-show="!(msg.type === 'doc-highlight' || msg.type === 'doc-image') || !isDocMessageGroupedWithUser(index)"
             :key="index" 
             class="message-row"
-            :class="msg.role"
+            :class="[msg.role, { 'doc-message': msg.type === 'doc-highlight' || msg.type === 'doc-image' }]"
           >
-            <div class="avatar">
-              {{ msg.role === 'user' ? 'U' : 'A' }}
-            </div>
-            <div class="message-content">
-              <div class="sender-name">{{ msg.role === 'user' ? 'You' : 'Agent' }}</div>
-              
-              <!-- 用户消息 -->
-              <template v-if="msg.role === 'user'">
-                <div class="user-message-wrapper">
-                  <div v-if="editingMessageIndex !== index" class="bubble user-bubble">
-                {{ msg.content }}
-                    <button 
-                      class="edit-btn" 
-                      @click="startEdit(index, msg.content)"
-                      :disabled="isLoading"
-                      title="编辑消息"
-                    >
-                      <el-icon><Edit /></el-icon>
-                    </button>
-                  </div>
-                  <div v-else class="edit-wrapper">
-                    <textarea
-                      v-model="editingContent"
-                      class="edit-input"
-                      rows="3"
-                      ref="editTextareaRef"
-                    ></textarea>
-                    <div class="edit-actions">
-                      <button 
-                        class="edit-save-btn" 
-                        @click="handleSaveEdit(index)"
-                        :disabled="!editingContent.trim()"
-                      >
-                        <el-icon><Check /></el-icon>
-                        保存并重新生成
-                      </button>
-                      <button 
-                        class="edit-cancel-btn" 
-                        @click="cancelEdit"
-                      >
-                        <el-icon><Close /></el-icon>
-                        取消
-                      </button>
+            <!-- 文档高亮消息（独立显示，如果后面没有 user 消息） -->
+            <template v-if="msg.type === 'doc-highlight' && !isDocMessageGroupedWithUser(index)">
+              <DocHighlightMessage
+                :filename="msg.filename"
+                :page-number="msg.pageNumber"
+                :file-extension="msg.fileExtension"
+                @close="handleCloseDocHighlight(index)"
+              />
+            </template>
+            
+            <!-- 文档图片消息（独立显示，如果后面没有 user 消息） -->
+            <template v-else-if="msg.type === 'doc-image' && !isDocMessageGroupedWithUser(index)">
+              <DocImageMessage
+                :filename="msg.filename"
+                :page-number="msg.pageNumber"
+                :image-url="msg.imageUrl"
+                :file-extension="msg.fileExtension"
+                @close="handleCloseDocImage(index)"
+              />
+            </template>
+            
+            <!-- 普通消息 -->
+            <template v-else>
+              <div class="avatar">
+                {{ msg.role === 'user' ? 'U' : 'A' }}
+              </div>
+              <div class="message-content">
+                <div class="sender-name">{{ msg.role === 'user' ? 'You' : 'Agent' }}</div>
+                
+                <!-- 用户消息 -->
+                <template v-if="msg.role === 'user'">
+                  <div class="user-message-wrapper">
+                    <!-- 淡卡其色圆角方框 -->
+                    <div class="user-message-box">
+                      <!-- 附件区域（显示在文本上方） -->
+                      <div v-if="getUserMessageAttachments(index).length > 0" class="user-message-attachments">
+                        <div
+                          v-for="(attMsg, attIndex) in getUserMessageAttachments(index)"
+                          :key="attIndex"
+                          class="user-message-attachment-item"
+                        >
+                          <DocHighlightMessage
+                            v-if="attMsg.type === 'doc-highlight'"
+                            :filename="attMsg.filename"
+                            :page-number="attMsg.pageNumber"
+                            :file-extension="attMsg.fileExtension"
+                            @close="handleCloseDocHighlight(attMsg.index)"
+                          />
+                          <DocImageMessage
+                            v-else-if="attMsg.type === 'doc-image'"
+                            :filename="attMsg.filename"
+                            :page-number="attMsg.pageNumber"
+                            :image-url="attMsg.imageUrl"
+                            :file-extension="attMsg.fileExtension"
+                            @close="handleCloseDocImage(attMsg.index)"
+                          />
+                        </div>
+                      </div>
+                      
+                      <!-- 文本内容 -->
+                      <div v-if="editingMessageIndex !== index" class="user-message-text">
+                        {{ msg.content }}
+                        <button 
+                          class="edit-btn" 
+                          @click="startEdit(index, msg.content)"
+                          :disabled="isLoading"
+                          title="编辑消息"
+                        >
+                          <el-icon><Edit /></el-icon>
+                        </button>
+                      </div>
+                      <div v-else class="edit-wrapper">
+                        <textarea
+                          v-model="editingContent"
+                          class="edit-input"
+                          rows="3"
+                          ref="editTextareaRef"
+                        ></textarea>
+                        <div class="edit-actions">
+                          <button 
+                            class="edit-save-btn" 
+                            @click="handleSaveEdit(index)"
+                            :disabled="!editingContent.trim()"
+                          >
+                            <el-icon><Check /></el-icon>
+                            保存并重新生成
+                          </button>
+                          <button 
+                            class="edit-cancel-btn" 
+                            @click="cancelEdit"
+                          >
+                            <el-icon><Close /></el-icon>
+                            取消
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   </div>
-              </div>
-              </template>
+                </template>
               
               <!-- AI 回复 -->
               <template v-else>
@@ -117,36 +170,64 @@
                 </template>
               </template>
             </div>
+            </template>
           </div>
         </div>
       </div>
 
-      <!-- 底部输入框 -->
+      <!-- 底部输入区 -->
       <div class="input-area-wrapper">
         <div class="input-box">
-          <textarea 
-            v-model="inputMessage"
-            class="chat-input"
-            placeholder="Ask anything about your documents..."
-            @keydown.enter.prevent="handleSend"
-            rows="1"
-            ref="textareaRef"
-          ></textarea>
-          <button 
-            v-if="!isLoading"
-            class="send-btn" 
-            :disabled="!inputMessage.trim() || isLoading || editingMessageIndex !== null"
-            @click="handleSend"
-          >
-            <el-icon><Position /></el-icon>
-          </button>
-          <button 
-            v-else
-            class="stop-btn" 
-            @click="handleStop"
-          >
-            <el-icon><Close /></el-icon>
-          </button>
+          <!-- 输入框内部的文档附件卡片 -->
+          <div v-if="composerAttachments.length" class="composer-attachments">
+            <div
+              v-for="(att, attIndex) in composerAttachments"
+              :key="att.id || attIndex"
+              class="composer-attachment-item"
+            >
+              <DocHighlightMessage
+                v-if="att.type === 'parsed'"
+                :filename="att.filename"
+                :page-number="att.pageNumber"
+                :file-extension="att.fileExtension"
+                @close="removeComposerAttachment(attIndex)"
+              />
+              <DocImageMessage
+                v-else-if="att.type === 'image'"
+                :filename="att.filename"
+                :page-number="att.pageNumber"
+                :image-url="att.imageUrl"
+                :file-extension="att.fileExtension"
+                @close="removeComposerAttachment(attIndex)"
+              />
+            </div>
+          </div>
+          
+          <div class="input-content-wrapper">
+            <textarea 
+              v-model="inputMessage"
+              class="chat-input"
+              placeholder="Ask anything about your documents..."
+              @keydown.enter.prevent="handleSend"
+              rows="1"
+              ref="textareaRef"
+            ></textarea>
+            <button 
+              v-if="!isLoading"
+              class="send-btn" 
+              :disabled="!inputMessage.trim() || isLoading || editingMessageIndex !== null"
+              @click="handleSend"
+            >
+              <el-icon><Position /></el-icon>
+            </button>
+            <button 
+              v-else
+              class="stop-btn" 
+              @click="handleStop"
+            >
+              <el-icon><Close /></el-icon>
+            </button>
+          </div>
         </div>
         <div class="input-footer">
           Agent can make mistakes. Please verify important information.
@@ -175,20 +256,13 @@
       <div class="sidebar-content" v-show="!isPanelCollapsed">
         <el-tabs v-model="activeTab" class="sidebar-tabs">
           <!-- 试题分析对话：习题解析进度 Tab（默认） -->
-          <el-tab-pane v-if="isExamAnalysisConversation" label="习题解析进度" name="analysis">
+          <el-tab-pane v-if="isExamAnalysisConversation" label="习题解析" name="analysis">
             <div class="tab-content-wrapper">
               <ExamAnalysisProgress v-if="conversationId" />
             </div>
           </el-tab-pane>
 
-          <!-- 普通对话：思维导图 Tab -->
-          <el-tab-pane v-if="!isExamAnalysisConversation" label="Mind Map" name="mindmap">
-            <div class="tab-content-wrapper">
-               <MindMapViewer v-if="conversationId" />
-            </div>
-          </el-tab-pane>
-
-          <!-- 文档 Tab -->
+          <!-- 文档 Tab（默认显示） -->
           <el-tab-pane label="Documents" name="documents">
             <div class="docs-panel">
               <!-- PPT 查看器 -->
@@ -196,12 +270,21 @@
                 v-if="conversationId" 
                 ref="pptViewerRef"
                 :default-file-id="selectedDocumentId"
+                @request-load-parsed="handleRequestLoadParsed"
+                @request-load-image="handleRequestLoadImage"
               />
               <el-empty
                 v-else
                 description="请先选择或创建一个对话"
                 :image-size="120"
               />
+            </div>
+          </el-tab-pane>
+
+          <!-- 普通对话：思维导图 Tab -->
+          <el-tab-pane v-if="!isExamAnalysisConversation" label="Mind Map" name="mindmap">
+            <div class="tab-content-wrapper">
+               <MindMapViewer v-if="conversationId" />
             </div>
           </el-tab-pane>
         </el-tabs>
@@ -225,7 +308,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick, onMounted, watch, computed } from 'vue'
+import { ref, nextTick, onMounted, watch, computed, provide } from 'vue'
 import { useRoute } from 'vue-router'
 import { Position, ArrowRight, ArrowLeft, Share, Edit, Close, Check } from '@element-plus/icons-vue'
 import { marked } from 'marked'
@@ -238,8 +321,11 @@ import MindMapViewer from '../mindmap/components/MindMapViewer.vue'
 import PPTViewer from '../documents/components/PPTViewer/PPTViewer.vue'
 import ExamAnalysisProgress from './components/ExamAnalysisProgress.vue'
 import ToolCallInline from './components/ToolCallInline.vue'
+import DocHighlightMessage from './components/DocHighlightMessage.vue'
+import DocImageMessage from './components/DocImageMessage.vue'
 import { api, BASE_URL } from '../../services/api'
 import chatService from './services/chatService'
+import documentService from '../documents/services/documentService'
 
 // 配置 marked 选项
 marked.setOptions({
@@ -269,14 +355,14 @@ const editingContent = ref('')
 
 // 面板状态
 const isPanelCollapsed = ref(false)
-const activeTab = ref('mindmap')
+const activeTab = ref('documents')
 const showGraphModal = ref(false)
 
 // 试题分析专属对话：右侧默认显示「习题解析进度」
 const isExamAnalysisConversation = computed(() => convStore.currentConversation?.conversation_type === 'exam_analysis')
 
 watch(isExamAnalysisConversation, (isExam) => {
-  activeTab.value = isExam ? 'analysis' : 'mindmap'
+  activeTab.value = isExam ? 'analysis' : 'documents'
 }, { immediate: true })
 
 // 侧边栏宽度（可拖动调整）
@@ -297,26 +383,46 @@ const thinkCollapseStates = ref([])
 // 消息数据
 const messages = ref([])
 
+// 输入框上方的文档附件（解析数据 / 图片）
+const composerAttachments = ref([])
+
 // 当前选中的文档ID（用于 PPT 查看器）
 const selectedDocumentId = ref(null)
 
 // PPT 查看器引用
 const pptViewerRef = ref(null)
 
-// 获取当前对话的文档
+// 获取当前对话可用的文档（优先按 subject，其次按 conversation）
 const currentDocuments = computed(() => {
-  if (!conversationId.value) return []
-  return docStore.getDocumentsByConversation(conversationId.value) || []
+  // 优先使用 subjectId（学科文档场景）
+  if (subjectId.value) {
+    return docStore.getDocumentsBySubject(subjectId.value) || []
+  }
+  // 回退到按 conversationId 获取文档（向后兼容旧逻辑）
+  if (conversationId.value) {
+    return docStore.getDocumentsByConversation(conversationId.value) || []
+  }
+  return []
 })
 
-// 监听文档列表变化，自动选择第一个支持的文档（PPTX/PDF）
+// 监听文档列表变化，自动选择按字符排序的第一个文档
 watch(currentDocuments, (docs) => {
   if (docs.length > 0 && !selectedDocumentId.value) {
-    // 优先选择 PPTX，其次 PDF
-    const pptxDoc = docs.find(doc => doc.file_extension === 'pptx')
-    const pdfDoc = docs.find(doc => doc.file_extension === 'pdf')
-    selectedDocumentId.value = (pptxDoc || pdfDoc)?.file_id || null
-    console.log('📄 自动选择文档:', selectedDocumentId.value)
+    // 过滤支持的文档类型（PPTX/PDF）
+    const supportedDocs = docs.filter(doc => 
+      doc.file_extension === 'pptx' || doc.file_extension === 'pdf'
+    )
+    
+    if (supportedDocs.length > 0) {
+      // 按文件名字符排序，选择第一个
+      const sortedDocs = [...supportedDocs].sort((a, b) => {
+        const nameA = (a.filename || '').toLowerCase()
+        const nameB = (b.filename || '').toLowerCase()
+        return nameA.localeCompare(nameB)
+      })
+      selectedDocumentId.value = sortedDocs[0]?.file_id || null
+      console.log('📄 自动选择文档（按字符排序）:', selectedDocumentId.value, sortedDocs[0]?.filename)
+    }
   }
 }, { immediate: true })
 
@@ -351,17 +457,53 @@ const loadMessages = async () => {
   try {
     const res = await api.get(`/api/conversations/${conversationId.value}/messages`)
     
-    if (res.messages) {
+      if (res.messages) {
       // 过滤掉 tool 角色的消息，这些消息不应该显示给用户
       // tool 消息包含大量的工具执行结果数据，会导致性能问题
       let filteredMessages = res.messages
         .filter(m => m.role !== 'tool') // 过滤 tool 消息
-        .map(m => ({
-          role: m.role === 'human' ? 'user' : m.role, // 兼容后端可能返回 human
-          content: m.content || '',
-          streamItems: m.streamItems || null, // 保留 streamItems（工具调用信息在这里）
-          toolCalls: m.toolCalls || null // 保留 toolCalls（向后兼容）
-        }))
+        .map(m => {
+          
+          // 处理 doc-* 类型的消息（文档附件）
+          if (m.role === 'system' && m.type && (m.type === 'doc-highlight' || m.type === 'doc-image')) {
+            let imageUrl = m.imageUrl || null
+            
+            // 如果是 doc-image 且缺少 imageUrl，尝试重新生成（兼容旧数据）
+            if (m.type === 'doc-image' && !imageUrl && m.fileId && m.pageNumber) {
+              if (subjectId.value) {
+                imageUrl = documentService.getSlideImageUrlForSubject(
+                  subjectId.value,
+                  m.fileId,
+                  m.pageNumber
+                )
+              } else if (conversationId.value) {
+                imageUrl = documentService.getSlideImageUrl(
+                  conversationId.value,
+                  m.fileId,
+                  m.pageNumber
+                )
+              }
+            }
+            
+            return {
+              type: m.type,
+              role: 'system',
+              filename: m.filename,
+              pageNumber: m.pageNumber,
+              fileExtension: m.fileExtension,
+              fileId: m.fileId,
+              imageUrl: imageUrl // 仅 doc-image 有
+            }
+          }
+          
+          // 普通消息
+          return {
+            role: m.role === 'human' ? 'user' : m.role, // 兼容后端可能返回 human
+            content: m.content || '',
+            streamItems: m.streamItems || null, // 保留 streamItems（工具调用信息在这里）
+            toolCalls: m.toolCalls || null // 保留 toolCalls（向后兼容）
+          }
+        })
       
       // 合并连续的 assistant 消息（一条有 tool_calls，一条有 content）
       const mergedMessages = []
@@ -398,18 +540,103 @@ const loadMessages = async () => {
   }
 }
 
+// 将输入文本与当前选中的文档附件一起拼接成发送给模型的查询
+const buildQueryWithAttachments = (userText) => {
+  if (!composerAttachments.value.length) return userText
+
+  const parts = []
+
+  composerAttachments.value.forEach((att) => {
+    const baseLabel =
+      att.fileExtension === 'pdf' ? '页' : '张幻灯片'
+
+    if (att.type === 'parsed') {
+      // 解析数据：附带该页文本的截断内容
+      const raw = att.parsedData?.data || att.parsedData || {}
+      const textContent = (raw.text_content || raw.text || '') + ''
+      const snippet = textContent.slice(0, 2000) // 避免过长
+
+      parts.push(
+        `【引用文档解析片段】${att.filename} 第 ${att.pageNumber} ${baseLabel}\n` +
+        (snippet ? `${snippet}` : '（该页无可用文本，仅作为位置引用）')
+      )
+    } else if (att.type === 'image') {
+      // 图片：目前只能提供位置信息，引导模型结合文档理解
+      parts.push(
+        `【引用文档图片】${att.filename} 第 ${att.pageNumber} ${baseLabel}\n` +
+        '（图片位于该页，回答时请结合文档内容与用户问题进行推理）'
+      )
+    }
+  })
+
+  const prefix = parts.join('\n\n')
+  return `${prefix}\n\n【用户问题】\n${userText}`
+}
+
 const handleSend = async () => {
   if (!inputMessage.value.trim() || isLoading.value || editingMessageIndex.value !== null) return
 
-  const content = inputMessage.value.trim()
+  const rawContent = inputMessage.value.trim()
   inputMessage.value = ''
   
   if (textareaRef.value) textareaRef.value.style.height = 'auto'
 
-  // 1. 添加用户消息
+  // 1. 先保存并显示文档附件消息（如果有）
+  const attachmentsToSave = [...composerAttachments.value]
+  if (attachmentsToSave.length > 0) {
+    // 生成基础时间戳：当前时间减去 1 秒，确保 doc-* 消息排在用户消息之前
+    const baseTimestamp = new Date(Date.now() - 1000).toISOString()
+    
+    for (let i = 0; i < attachmentsToSave.length; i++) {
+      const att = attachmentsToSave[i]
+      try {
+        // 将前端类型转换为后端期望的类型
+        const backendType = att.type === 'parsed' ? 'doc-highlight' : (att.type === 'image' ? 'doc-image' : att.type)
+        
+        // 保存到后端，使用相同的基础时间戳，后端会自动添加微小的偏移量
+        await chatService.saveDocMessage(
+          conversationId.value,
+          backendType,
+          att.filename,
+          att.pageNumber,
+          att.fileExtension,
+          att.fileId,
+          att.type === 'image' ? att.imageUrl : null,
+          baseTimestamp
+        )
+        
+        // 添加到前端消息列表（显示在用户消息之前）
+        if (att.type === 'parsed') {
+          messages.value.push({
+            type: 'doc-highlight',
+            role: 'system',
+            filename: att.filename,
+            pageNumber: att.pageNumber,
+            fileExtension: att.fileExtension,
+            fileId: att.fileId
+          })
+        } else if (att.type === 'image') {
+          messages.value.push({
+            type: 'doc-image',
+            role: 'system',
+            filename: att.filename,
+            pageNumber: att.pageNumber,
+            imageUrl: att.imageUrl,
+            fileExtension: att.fileExtension,
+            fileId: att.fileId
+          })
+        }
+      } catch (error) {
+        console.error('保存文档附件消息失败:', error)
+      }
+    }
+    scrollToBottom()
+  }
+
+  // 2. 添加用户消息（展示原始输入）
   messages.value.push({
     role: 'user',
-    content: content
+    content: rawContent
   })
   scrollToBottom()
 
@@ -417,6 +644,11 @@ const handleSend = async () => {
   
   // 创建 AbortController
   abortController.value = new AbortController()
+
+  // 将附件信息和用户输入一起拼接成发送给模型的查询
+  const queryForModel = buildQueryWithAttachments(rawContent)
+  // 当前轮发送后，清空附件（行为类似 Kimi 等引用卡片）
+  composerAttachments.value = []
 
   // 2. 准备 AI 消息占位符
   const aiMessageIndex = messages.value.length
@@ -436,7 +668,7 @@ const handleSend = async () => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        query: content,
+        query: queryForModel,
         mode: 'agent' // 使用 agent 模式以支持工具调用
       }),
       signal: abortController.value.signal
@@ -724,7 +956,7 @@ const handleSend = async () => {
       try {
         await chatStore.saveMessage(
           conversationId.value,
-          content, // 用户查询
+          rawContent, // 用户查询（使用原始输入，附件已单独保存为 doc-* 消息）
           fullContent, // AI 回复
           finalToolCalls, // 工具调用
           streamItems.length > 0 ? [...streamItems] : null // streamItems
@@ -759,7 +991,7 @@ const handleSend = async () => {
     try {
       await chatStore.saveMessage(
         conversationId.value,
-        content,
+        rawContent, // 用户查询（使用原始输入，附件已单独保存为 doc-* 消息）
         messages.value[aiMessageIndex].content,
         null,
         streamItems.length > 0 ? [...streamItems] : null
@@ -789,7 +1021,14 @@ const startEdit = (index, content) => {
   editingContent.value = content
   nextTick(() => {
     if (editTextareaRef.value) {
-      editTextareaRef.value.focus()
+      // 处理 ref 可能是数组的情况
+      const refValue = editTextareaRef.value
+      const isArray = Array.isArray(refValue)
+      const targetElement = isArray ? refValue[0] : refValue
+      
+      if (targetElement && typeof targetElement.focus === 'function') {
+        targetElement.focus()
+      }
     }
   })
 }
@@ -809,9 +1048,63 @@ const handleSaveEdit = async (index) => {
   // 获取原始消息列表（包含 tool 消息）以找到正确的索引
   const originalMessages = await api.get(`/api/conversations/${conversationId.value}/messages`)
   
-  if (!originalMessages.messages) {
-    console.error('无法获取原始消息列表')
-    return
+  // 如果后端消息列表为空，说明消息还没有保存（可能是被打断的情况）
+  // 需要先保存当前前端的所有消息到后端
+  if (!originalMessages.messages || originalMessages.messages.length === 0) {
+    // 如果编辑的是第一条消息（index=0），且后端消息列表为空，说明这是首次对话且被打断
+    // 此时直接清空前端消息，然后发送新消息即可，无需调用 resetHistory
+    if (index === 0) {
+      // 清空前端消息
+      messages.value = []
+      
+      // 重置编辑状态和加载状态
+      editingMessageIndex.value = null
+      editingContent.value = ''
+      isLoading.value = false  // 确保加载状态已重置
+      
+      // 将新内容填入输入框
+      inputMessage.value = newContent
+      
+      // 自动触发发送
+      nextTick(() => {
+        handleSend()
+      })
+      
+      return
+    }
+    
+    // 如果 index > 0，需要先保存消息
+    // 保存前端的所有消息到后端
+    for (let i = 0; i < messages.value.length; i++) {
+      const msg = messages.value[i]
+      if (msg.role === 'user') {
+        // 用户消息：需要找到对应的 AI 回复
+        const aiReply = messages.value[i + 1]
+        if (aiReply && aiReply.role === 'assistant') {
+          try {
+            await chatStore.saveMessage(
+              conversationId.value,
+              msg.content,
+              aiReply.content || '',
+              aiReply.toolCalls || null,
+              aiReply.streamItems || null
+            )
+          } catch (error) {
+            console.error('保存消息失败:', error)
+          }
+        }
+      }
+    }
+    
+    // 重新获取消息列表
+    const updatedMessages = await api.get(`/api/conversations/${conversationId.value}/messages`)
+    if (updatedMessages.messages && updatedMessages.messages.length > 0) {
+      originalMessages.messages = updatedMessages.messages
+    } else {
+      // 如果保存后仍然为空，说明保存失败，无法继续
+      console.error('无法保存消息到后端')
+      return
+    }
   }
   
   // 找到被编辑的用户消息在原始列表中的索引
@@ -938,12 +1231,22 @@ const initializeConversation = async () => {
       const docs = docStore.getDocumentsBySubject(subjectId.value)
       console.log('✅ Documents loaded (by subject):', docs)
     
-    // 自动选择第一个支持的文档（PPTX 或 PDF）
+    // 自动选择按字符排序的第一个文档
     if (docs && docs.length > 0) {
-      const pptxDoc = docs.find(doc => doc.file_extension === 'pptx')
-      const pdfDoc = docs.find(doc => doc.file_extension === 'pdf')
-      selectedDocumentId.value = (pptxDoc || pdfDoc)?.file_id || null
-      console.log('📄 自动选择文档:', selectedDocumentId.value)
+      const supportedDocs = docs.filter(doc => 
+        doc.file_extension === 'pptx' || doc.file_extension === 'pdf'
+      )
+      
+      if (supportedDocs.length > 0) {
+        // 按文件名字符排序，选择第一个
+        const sortedDocs = [...supportedDocs].sort((a, b) => {
+          const nameA = (a.filename || '').toLowerCase()
+          const nameB = (b.filename || '').toLowerCase()
+          return nameA.localeCompare(nameB)
+        })
+        selectedDocumentId.value = sortedDocs[0]?.file_id || null
+        console.log('📄 自动选择文档（按字符排序）:', selectedDocumentId.value, sortedDocs[0]?.filename)
+      }
       }
     } else {
       // 回退到旧的 conversationId 方式
@@ -952,10 +1255,20 @@ const initializeConversation = async () => {
       console.log('✅ Documents loaded (by conversation):', docs)
       
       if (docs && docs.length > 0) {
-        const pptxDoc = docs.find(doc => doc.file_extension === 'pptx')
-        const pdfDoc = docs.find(doc => doc.file_extension === 'pdf')
-        selectedDocumentId.value = (pptxDoc || pdfDoc)?.file_id || null
-        console.log('📄 自动选择文档:', selectedDocumentId.value)
+        const supportedDocs = docs.filter(doc => 
+          doc.file_extension === 'pptx' || doc.file_extension === 'pdf'
+        )
+        
+        if (supportedDocs.length > 0) {
+          // 按文件名字符排序，选择第一个
+          const sortedDocs = [...supportedDocs].sort((a, b) => {
+            const nameA = (a.filename || '').toLowerCase()
+            const nameB = (b.filename || '').toLowerCase()
+            return nameA.localeCompare(nameB)
+          })
+          selectedDocumentId.value = sortedDocs[0]?.file_id || null
+          console.log('📄 自动选择文档（按字符排序）:', selectedDocumentId.value, sortedDocs[0]?.filename)
+        }
       }
     }
   } catch (e) {
@@ -975,6 +1288,148 @@ onMounted(async () => {
   
   await initializeConversation()
 })
+
+// 处理"载入解析数据"请求
+const handleRequestLoadParsed = async (data) => {
+  if (!data.fileId || !data.pageNumber) return
+  
+  // 获取文档信息
+  const doc = currentDocuments.value.find(d => d.file_id === data.fileId)
+  if (!doc) return
+  
+  // 获取该页的解析数据
+  try {
+    let slideData
+    if (subjectId.value) {
+      slideData = await documentService.getSlideForSubject(
+        subjectId.value,
+        data.fileId,
+        data.pageNumber
+      )
+    } else if (conversationId.value) {
+      slideData = await documentService.getSlide(
+        conversationId.value,
+        data.fileId,
+        data.pageNumber
+      )
+    }
+    
+    // 在输入框上方插入解析数据附件（不触发对话消息）
+    composerAttachments.value.push({
+      id: `parsed-${data.fileId}-${data.pageNumber}-${Date.now()}`,
+      type: 'parsed',
+      filename: data.filename || doc.filename,
+      pageNumber: data.pageNumber,
+      fileExtension: doc.file_extension,
+      fileId: data.fileId,
+      parsedData: slideData // 保存解析数据，后续可用于调用模型
+    })
+    
+    scrollToBottom()
+  } catch (error) {
+    console.error('获取解析数据失败:', error)
+  }
+}
+
+// 处理"载入图片"请求
+const handleRequestLoadImage = (data) => {
+  if (!data.fileId || !data.pageNumber) return
+  
+  // 获取文档信息
+  const doc = currentDocuments.value.find(d => d.file_id === data.fileId)
+  if (!doc) return
+  
+  // 构建图片 URL
+  let imageUrl
+  if (subjectId.value) {
+    imageUrl = documentService.getSlideImageUrlForSubject(
+      subjectId.value,
+      data.fileId,
+      data.pageNumber
+    )
+  } else if (conversationId.value) {
+    imageUrl = documentService.getSlideImageUrl(
+      conversationId.value,
+      data.fileId,
+      data.pageNumber
+    )
+  }
+  
+  if (!imageUrl) return
+  
+  // 在输入框上方插入图片附件
+  composerAttachments.value.push({
+    id: `image-${data.fileId}-${data.pageNumber}-${Date.now()}`,
+    type: 'image',
+    filename: data.filename || doc.filename,
+    pageNumber: data.pageNumber,
+    imageUrl: imageUrl,
+    fileExtension: doc.file_extension,
+    fileId: data.fileId
+  })
+  
+  scrollToBottom()
+}
+
+// 检查某个 doc-* 消息是否会被分组到后面的 user 消息中
+const isDocMessageGroupedWithUser = (index) => {
+  const msg = messages.value[index]
+  if (!msg || (msg.type !== 'doc-highlight' && msg.type !== 'doc-image')) {
+    return false
+  }
+  // 检查后面是否有 user 消息
+  for (let i = index + 1; i < messages.value.length; i++) {
+    const nextMsg = messages.value[i]
+    if (nextMsg.role === 'user') {
+      return true
+    }
+    // 如果遇到非 doc-* 消息，说明 doc-* 消息组已结束
+    if (nextMsg.type !== 'doc-highlight' && nextMsg.type !== 'doc-image') {
+      return false
+    }
+  }
+  return false
+}
+
+// 获取某个 user 消息前面连续的 doc-* 消息
+const getUserMessageAttachments = (userIndex) => {
+  const attachments = []
+  // 向前查找连续的 doc-* 消息
+  for (let i = userIndex - 1; i >= 0; i--) {
+    const msg = messages.value[i]
+    if (msg.type === 'doc-highlight' || msg.type === 'doc-image') {
+      attachments.unshift({
+        ...msg,
+        index: i
+      })
+    } else {
+      // 遇到非 doc-* 消息，停止查找
+      break
+    }
+  }
+  return attachments
+}
+
+// 关闭文档图片消息
+const handleCloseDocImage = (index) => {
+  if (index >= 0 && index < messages.value.length) {
+    messages.value.splice(index, 1)
+  }
+}
+
+// 关闭文档高亮消息
+const handleCloseDocHighlight = (index) => {
+  if (index >= 0 && index < messages.value.length) {
+    messages.value.splice(index, 1)
+  }
+}
+
+// 移除输入框上的附件卡片
+const removeComposerAttachment = (index) => {
+  if (index >= 0 && index < composerAttachments.value.length) {
+    composerAttachments.value.splice(index, 1)
+  }
+}
 
 // 监听路由变化，当 conversationId 改变时重新加载
 watch(() => conversationId.value, async (newConvId, oldConvId) => {
@@ -1139,6 +1594,7 @@ const jumpToDocumentPage = async (fileId, page) => {
     viewer.jumpToPage(pageNumber)
   }
 }
+provide('jumpToDocumentPage', jumpToDocumentPage)
 
 // 格式化消息，识别警告提示并应用斜体样式，移除 think 标签
 const formatMessageWithWarning = (text) => {
@@ -1298,6 +1754,23 @@ const formatEnhancedMarkdown = (text) => {
   gap: 16px; /* 减小消息之间的间距 */
 }
 
+.message-row.doc-message {
+  display: flex;
+  justify-content: flex-start;
+  padding: 4px 0;
+  padding-left: 44px; /* 头像宽度(32) + 间距(12)，与普通消息左对齐 */
+}
+
+.message-row.doc-message .avatar,
+.message-row.doc-message .message-content .sender-name {
+  display: none;
+}
+
+.message-row.doc-message .message-content {
+  width: 100%;
+  max-width: 800px;
+}
+
 .message-row {
   display: flex;
   gap: 12px; /* 减小消息内部元素间距 */
@@ -1349,6 +1822,30 @@ const formatEnhancedMarkdown = (text) => {
   position: relative;
 }
 
+.user-message-box {
+  background-color: #FAF8F3;
+  border-radius: 12px;
+  padding: 12px 16px;
+  position: relative;
+}
+
+.user-message-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.user-message-attachment-item {
+  width: 100%;
+}
+
+.user-message-text {
+  position: relative;
+  padding-right: 32px;
+  word-wrap: break-word;
+}
+
 .user-bubble {
   position: relative;
   padding-right: 32px;
@@ -1371,7 +1868,8 @@ const formatEnhancedMarkdown = (text) => {
   transition: opacity 0.2s, background-color 0.2s;
 }
 
-.user-bubble:hover .edit-btn {
+.user-bubble:hover .edit-btn,
+.user-message-text:hover .edit-btn {
   opacity: 1;
 }
 
@@ -1500,13 +1998,31 @@ const formatEnhancedMarkdown = (text) => {
   border-radius: 12px;
   padding: 12px 16px;
   display: flex;
-  align-items: flex-end;
-  gap: 12px;
+  flex-direction: column;
+  gap: 8px;
   transition: border-color 0.2s;
 }
 
 .input-box:focus-within {
   border-color: var(--border-focus);
+}
+
+.composer-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.composer-attachment-item {
+  max-width: 100%;
+}
+
+.input-content-wrapper {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  width: 100%;
 }
 
 .chat-input {

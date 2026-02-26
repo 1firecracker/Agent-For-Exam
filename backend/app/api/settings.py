@@ -51,12 +51,23 @@ async def get_llm_config():
         包含所有场景配置的字典，不包含 API Key
     """
     all_configs = config_service.get_all_configs()
+    
+    # 合并默认模型列表和自定义模型列表
+    custom_models = config_service.get_custom_models()
+    merged_model_lists = {}
+    
+    for binding, default_models in MODEL_LISTS.items():
+        custom_list = custom_models.get(binding, [])
+        # 合并列表并去重，保持默认模型在前
+        merged_list = list(dict.fromkeys(default_models + custom_list))
+        merged_model_lists[binding] = merged_list
+    
     return {
         "knowledge_graph": all_configs["knowledge_graph"],
         "chat": all_configs["chat"],
         "mindmap": all_configs["mindmap"],
         "embedding": all_configs.get("embedding", {}),
-        "model_lists": MODEL_LISTS
+        "model_lists": merged_model_lists
     }
 
 
@@ -94,7 +105,7 @@ async def update_llm_config(scene: str, config_data: LLMConfigUpdate):
     else:
         fixed_host = config_data.host
     
-    # 更新配置
+    # 更新配置（会自动添加自定义模型）
     config_service.update_config(
         scene=scene,
         binding=config_data.binding,
@@ -103,19 +114,39 @@ async def update_llm_config(scene: str, config_data: LLMConfigUpdate):
         api_key=config_data.api_key
     )
     
-    # 返回更新后的配置（不包含 API Key）
-    updated_config = config_service.get_all_configs()[scene]
+    # 返回更新后的配置和合并后的模型列表（不包含 API Key）
+    all_configs = config_service.get_all_configs()
+    custom_models = config_service.get_custom_models()
+    
+    # 合并模型列表
+    merged_model_lists = {}
+    for binding, default_models in MODEL_LISTS.items():
+        custom_list = custom_models.get(binding, [])
+        merged_list = list(dict.fromkeys(default_models + custom_list))
+        merged_model_lists[binding] = merged_list
+    
+    updated_config = all_configs[scene]
     return {
         "status": "success",
         "message": f"{scene} 配置已更新并立即生效",
-        "config": updated_config
+        "config": updated_config,
+        "model_lists": merged_model_lists
     }
 
 
 @router.get("/model-lists")
 async def get_model_lists():
-    """获取支持的模型列表"""
+    """获取支持的模型列表（包含自定义模型）"""
+    custom_models = config_service.get_custom_models()
+    
+    # 合并默认模型列表和自定义模型列表
+    merged_model_lists = {}
+    for binding, default_models in MODEL_LISTS.items():
+        custom_list = custom_models.get(binding, [])
+        merged_list = list(dict.fromkeys(default_models + custom_list))
+        merged_model_lists[binding] = merged_list
+    
     return {
-        "model_lists": MODEL_LISTS
+        "model_lists": merged_model_lists
     }
 

@@ -13,6 +13,7 @@ from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from app.schemas.exam import (
     ExamUploadResponse,
@@ -23,6 +24,12 @@ from app.schemas.exam import (
 from app.services.exam.exam_service import ExamService
 
 router = APIRouter(prefix="/api/exams", tags=["exams"])
+
+
+class ExamYearUpdate(BaseModel):
+    """更新试卷年份请求"""
+    year: str = Field(..., description="年份（如 2024、Unknown）")
+
 
 # 服务实例
 _exam_service: Optional[ExamService] = None
@@ -39,7 +46,7 @@ def get_exam_service() -> ExamService:
 @router.post("/upload", response_model=ExamUploadResponse)
 async def upload_exam(
     file: UploadFile = File(..., description="试卷 PDF 文件"),
-    year: int = Form(..., ge=1900, le=2100, description="考试年份"),
+    year: str = Form(default="", description="考试年份（可选；不填则从文件名与内容推断）"),
     title: str = Form(default="", description="试卷标题"),
     subject: str = Form(default="", description="科目名称"),
 ):
@@ -94,9 +101,19 @@ async def get_exam(exam_id: str):
     return exam
 
 
+@router.patch("/{exam_id}/year")
+async def update_exam_year(exam_id: str, body: ExamYearUpdate):
+    """更新试卷年份（解析后用户可编辑）"""
+    service = get_exam_service()
+    ok = service.update_exam_year(exam_id, body.year)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"试卷不存在: {exam_id}")
+    return {"message": "年份已更新", "exam_id": exam_id, "year": (body.year or "").strip() or "Unknown"}
+
+
 @router.get("", response_model=ExamListResponse)
 async def list_exams(
-    year: Optional[int] = Query(default=None, ge=1900, le=2100, description="按年份筛选"),
+    year: Optional[str] = Query(default=None, description="按年份筛选"),
     subject: Optional[str] = Query(default=None, description="按科目筛选"),
 ):
     """列出所有试卷"""

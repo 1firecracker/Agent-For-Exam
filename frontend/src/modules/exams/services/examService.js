@@ -76,6 +76,12 @@ const examService = {
     async reparseExam(examId) {
         const response = await axios.post(`${API_BASE}/${examId}/reparse`)
         return response.data
+    },
+
+    /** 更新试卷年份（解析后用户可编辑） */
+    async updateExamYear(examId, year) {
+        const response = await axios.patch(`${API_BASE}/${examId}/year`, { year })
+        return response.data
     }
 }
 

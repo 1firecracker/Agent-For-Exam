@@ -4,7 +4,7 @@
     <aside class="sidebar" :class="{ collapsed: isCollapsed }">
       <div class="sidebar-header">
         <div class="logo-area" v-show="!isCollapsed">
-          <h1 class="app-title">Agent Exam</h1>
+          <h1 class="app-title">Agent For Exam</h1>
         </div>
         <el-button class="new-chat-btn" @click="goHome" v-show="!isCollapsed">
           <el-icon></el-icon>

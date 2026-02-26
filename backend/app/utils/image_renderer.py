@@ -8,6 +8,11 @@ from threading import Lock
 from PIL import Image
 import pdfplumber
 
+# 全局 PowerPoint 应用实例管理
+_pptx_app_instance = None
+_pptx_app_lock = Lock()
+_pptx_app_ref_count = 0
+
 
 class ImageRenderer:
     """图片渲染器，支持PDF和PPTX转换为图片"""
@@ -158,6 +163,56 @@ class ImageRenderer:
                     file_path, slide_number, file_id, cache_path, is_thumbnail
                 )
     
+    def _get_or_create_pptx_app(self):
+        """获取或创建全局 PowerPoint 应用实例（单例模式）"""
+        global _pptx_app_instance, _pptx_app_lock, _pptx_app_ref_count
+        
+        with _pptx_app_lock:
+            if _pptx_app_instance is None:
+                import comtypes.client
+                try:
+                    # 尝试获取已存在的 PowerPoint 实例
+                    try:
+                        from comtypes.client import GetActiveObject
+                        _pptx_app_instance = GetActiveObject("PowerPoint.Application")
+                    except:
+                        # 如果没有已存在的实例，创建新实例
+                        _pptx_app_instance = comtypes.client.CreateObject("PowerPoint.Application")
+                    
+                    # 设置应用属性，尽可能隐藏窗口
+                    try:
+                        _pptx_app_instance.Visible = False
+                    except:
+                        try:
+                            _pptx_app_instance.WindowState = 2  # ppWindowMinimized
+                        except:
+                            pass
+                    
+                    # 禁用警告和提示
+                    try:
+                        _pptx_app_instance.DisplayAlerts = 0  # ppAlertsNone
+                    except:
+                        pass
+                    
+                    _pptx_app_ref_count = 0
+                except Exception as e:
+                    _pptx_app_instance = None
+                    raise
+            
+            _pptx_app_ref_count += 1
+            return _pptx_app_instance
+    
+    def _release_pptx_app(self):
+        """释放 PowerPoint 应用实例的引用计数"""
+        global _pptx_app_instance, _pptx_app_lock, _pptx_app_ref_count
+        
+        with _pptx_app_lock:
+            if _pptx_app_instance is not None:
+                _pptx_app_ref_count -= 1
+                # 如果引用计数为0，可以选择保持实例（以便复用）或关闭
+                # 这里选择保持实例以便复用，避免频繁创建/销毁
+                # 如果需要完全关闭，可以在这里调用 ppt_app.Quit()
+    
     def _render_pptx_with_powerpoint(
         self,
         file_path: str,
@@ -180,26 +235,54 @@ class ImageRenderer:
         Returns:
             图片文件路径（如果成功）
         """
-        import comtypes.client
-        
         # 统一缓存目录
         cache_dir = cache_path.parent
         cache_dir.mkdir(parents=True, exist_ok=True)
         
-        # 创建PowerPoint应用对象
-        ppt_app = comtypes.client.CreateObject("PowerPoint.Application")
+        # 获取或创建 PowerPoint 应用实例（单例）
+        ppt_app = self._get_or_create_pptx_app()
         
-        # 尝试隐藏窗口
+        # 在打开演示文稿前，再次确保窗口隐藏
         try:
             ppt_app.Visible = False
-        except Exception:
+        except:
             try:
                 ppt_app.WindowState = 2  # ppWindowMinimized
-            except Exception:
+            except:
                 pass
         
-        # 打开演示文稿
-        presentation = ppt_app.Presentations.Open(str(Path(file_path).absolute()))
+        # 使用 WithWindow 参数隐藏演示文稿窗口（msoFalse = 0）
+        # Presentations.Open(FileName, ReadOnly, Untitled, WithWindow)
+        # WithWindow: msoFalse (0) = 隐藏窗口, msoTrue (-1) = 显示窗口（默认）
+        try:
+            presentation = ppt_app.Presentations.Open(
+                str(Path(file_path).absolute()),
+                ReadOnly=True,      # 只读模式
+                Untitled=False,     # 不是未命名文件
+                WithWindow=0        # msoFalse - 隐藏窗口
+            )
+        except TypeError:
+            # 如果参数不支持，尝试使用命名参数或位置参数
+            try:
+                # 某些版本的 PowerPoint COM 可能不支持 WithWindow 参数
+                # 尝试使用位置参数
+                presentation = ppt_app.Presentations.Open(
+                    str(Path(file_path).absolute()),
+                    True,   # ReadOnly
+                    False,  # Untitled
+                    0       # WithWindow = msoFalse
+                )
+            except:
+                # 如果还是失败，回退到默认方式
+                presentation = ppt_app.Presentations.Open(str(Path(file_path).absolute()))
+                # 尝试隐藏窗口
+                try:
+                    ppt_app.Visible = False
+                except:
+                    try:
+                        ppt_app.WindowState = 2  # ppWindowMinimized
+                    except:
+                        pass
         
         try:
             total_slides = presentation.Slides.Count
@@ -260,21 +343,17 @@ class ImageRenderer:
             return target_cache if target_cache.exists() else None
             
         finally:
-            # 关闭演示文稿和应用
+            # 只关闭演示文稿，不关闭应用（以便复用）
             try:
                 presentation.Close()
-            except:
+            except Exception:
                 pass
-            try:
-                ppt_app.Quit()
-            except:
-                pass
+            
+            # 释放应用实例引用（不关闭应用，以便复用）
+            self._release_pptx_app()
+            
             try:
                 del presentation
-            except:
-                pass
-            try:
-                del ppt_app
             except:
                 pass
     

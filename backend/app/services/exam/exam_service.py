@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -42,19 +43,31 @@ class ExamService:
                 self.ocr_client = None
         except Exception as e:
             logger.warning(f"OCR 客户端初始化失败: {e}")
+
+    @staticmethod
+    def _infer_year(filename: str, text_snippet: str) -> Optional[str]:
+        """从文件名和正文前段用正则推断年份，返回 4 位数字字符串或 None。"""
+        year_re = re.compile(r"(19|20)\d{2}")
+        for source in (filename, text_snippet):
+            if not source:
+                continue
+            m = year_re.search(source)
+            if m:
+                return m.group(0)
+        return None
     
     async def upload_exam(
         self,
         file: UploadFile,
-        year: int,
+        year: str = "",
         title: str = "",
         subject: str = ""
     ) -> dict:
         """上传并处理试卷
-        
+
         Args:
             file: 上传的 PDF 文件
-            year: 考试年份
+            year: 考试年份（可选；空则处理时由文件名与内容推断）
             title: 试卷标题
             subject: 科目名称
             
@@ -72,19 +85,20 @@ class ExamService:
         if len(content) > config.settings.max_file_size:
             raise ValueError(f"文件过大，最大支持 {config.settings.max_file_size // 1024 // 1024}MB")
         
-        # 3. 创建试卷条目
-        exam_id = self.storage.create_exam_entry(year=year, title=title, subject=subject)
+        # 3. 创建试卷条目（未填年份时用占位，后续在解析流程中推断）
+        year_initial = (year or "").strip() or "Unknown"
+        exam_id = self.storage.create_exam_entry(year=year_initial, title=title, subject=subject)
         
-        # 4. 保存原始 PDF
+        # 4. 保存原始 PDF（会写入 original_filename 供推断）
         self.storage.save_source_pdf(exam_id, content, filename)
         
         # 5. 启动异步处理任务
-        task = asyncio.create_task(self._process_exam_async(exam_id, year))
+        task = asyncio.create_task(self._process_exam_async(exam_id, year_initial))
         task_id = f"exam-{exam_id}"
         
         logger.info(
             "试卷上传成功，开始异步处理",
-            extra={"event": "exam.upload", "exam_id": exam_id, "file_name": filename, "year": year}
+            extra={"event": "exam.upload", "exam_id": exam_id, "file_name": filename, "year": year_initial}
         )
         
         return {
@@ -123,7 +137,7 @@ class ExamService:
         try:
             self.storage.update_status(exam_id, "processing")
             exam_info = self.storage.get_exam_status(exam_id)
-            year = exam_info.get("year", 2024)
+            year = str(exam_info.get("year", "2024"))
             
             # 1. 获取已存在的 Markdown 内容
             exam_dir = self.storage.get_exam_dir(exam_id)
@@ -183,7 +197,7 @@ class ExamService:
             logger.error(f"试卷重解析失败: {exam_id}, 错误: {error_msg}")
             self.storage.update_status(exam_id, "failed", error_message=error_msg)
 
-    async def _process_exam_async(self, exam_id: str, year: int) -> None:
+    async def _process_exam_async(self, exam_id: str, year: str) -> None:
         """异步处理试卷的完整流程"""
         try:
             self.storage.update_status(exam_id, "processing")
@@ -210,6 +224,20 @@ class ExamService:
             if base64_map:
                 base64_path = self.storage.get_exam_dir(exam_id) / "base64_map.json"
                 cleaner.save_base64_map(base64_path)
+            
+            # 3.5 若用户未填年份，从文件名与正文前段推断并写回索引
+            exam_info = self.storage.get_exam_status(exam_id)
+            current_year = (exam_info.get("year") or "").strip()
+            if not current_year or current_year == "Unknown":
+                filename = exam_info.get("original_filename") or ""
+                text_for_infer = (cleaned_text or "")[:2000]
+                inferred = self._infer_year(filename, text_for_infer)
+                year = inferred if inferred else "Unknown"
+                self.storage.update_year(exam_id, year)
+                if inferred:
+                    logger.info(f"从文件名/内容推断年份: {exam_id} -> {year}")
+            else:
+                year = current_year
             
             # 4. 结构化解析
             logger.info(f"开始结构化解析: {exam_id}")
@@ -281,10 +309,23 @@ class ExamService:
         """获取完整试卷数据"""
         return self.storage.get_exam(exam_id)
     
-    def list_exams(self, year: int = None, subject: str = None) -> List[ExamListItem]:
+    def list_exams(self, year: str = None, subject: str = None) -> List[ExamListItem]:
         """列出试卷"""
         return self.storage.list_exams(year=year, subject=subject)
     
     def delete_exam(self, exam_id: str) -> bool:
         """删除试卷"""
         return self.storage.delete_exam(exam_id)
+
+    def update_exam_year(self, exam_id: str, year: str) -> bool:
+        """更新试卷年份（索引 + 已解析的 parsed.json）"""
+        info = self.storage.get_exam_status(exam_id)
+        if not info:
+            return False
+        year_str = (year or "").strip() or "Unknown"
+        self.storage.update_year(exam_id, year_str)
+        exam = self.storage.get_exam(exam_id)
+        if exam:
+            exam.year = year_str
+            self.storage.save_parsed_json(exam_id, exam)
+        return True

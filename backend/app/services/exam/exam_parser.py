@@ -120,13 +120,13 @@ class ExamParser:
         self.api_key = chat_config.get("api_key", config.settings.chat_llm_binding_api_key)
         self.host = chat_config.get("host", config.settings.chat_llm_binding_host)
     
-    async def parse(self, markdown_text: str, exam_id: str, year: int) -> List[Question]:
+    async def parse(self, markdown_text: str, exam_id: str, year: str) -> List[Question]:
         """解析试卷 Markdown 文本为结构化题目列表
-        
+
         Args:
             markdown_text: 清洗后的 Markdown 文本
             exam_id: 试卷ID（用于生成题目ID）
-            year: 考试年份
+            year: 考试年份（字符串）
             
         Returns:
             题目列表
@@ -150,7 +150,7 @@ class ExamParser:
         logger.info("文本较长，启用 Supervisor-Worker 模式")
         return await self._parse_with_supervisor(markdown_text, exam_id, year)
     
-    async def _parse_with_supervisor(self, text: str, exam_id: str, year: int) -> List[Question]:
+    async def _parse_with_supervisor(self, text: str, exam_id: str, year: str) -> List[Question]:
         """使用 Supervisor-Worker 架构解析长文档"""
         # ========== Phase 1: Supervisor 智能切分 ==========
         logger.info("Phase 1: Supervisor 正在分析文档结构...")
@@ -287,45 +287,11 @@ class ExamParser:
         return chunks
     
     def _robust_find(self, text: str, marker: str) -> int:
-        # Puts existing robust_find logic here...
-        # Since replace functionality is limited, I will reference existing method if possible or re-implement short version.
-        # WAIT: replace_file_content replaces a BLOCK. I need to be careful not to delete _robust_find logic.
-        # Strategy: I will keep _extract_chunks_by_markers and _robust_find structure as is in the file, 
-        # but I need to update _call_worker signature which is AFTER _robust_find.
-        # This replaces lines 114 to 265... which covers parse, _parse_with_supervisor, _smart_split, _extract_chunks_by_markers, etc.
-        # I must include the FULL Implementation of these methods to be safe.
-        
-        # Let me re-implement _extract_chunks_by_markers fully to be safe.
-        
-        chunks = []
-        marker_indices = []
-        for i, split in enumerate(splits):
-            marker = split.get("start_marker", "")
-            if not marker: continue
-            idx = self._robust_find(text, marker)
-            if idx == -1:
-                logger.warning(f"Split {i+1}: 无法定位 Start Marker，尝试跳过")
-                continue
-            marker_indices.append((idx, split))
-            
-        marker_indices.sort(key=lambda x: x[0])
-        
-        for i in range(len(marker_indices)):
-            start_pos, split = marker_indices[i]
-            if i < len(marker_indices) - 1:
-                end_pos = marker_indices[i+1][0]
-            else:
-                end_pos = len(text)
-            
-            if start_pos >= end_pos:
-                logger.warning(f"Chunk {i+1}: Start >= End，跳过")
-                continue
-            
-            chunk = text[start_pos:end_pos]
-            chunks.append(chunk)
-            logger.info(f"Chunk {i+1}: 提取了 {len(chunk)} 字符 (Q{split.get('start_question', '?')} 开始)")
-        
-        return chunks
+        """在 text 中查找 marker 的起始位置，未找到返回 -1。"""
+        if not marker:
+            return -1
+        idx = text.find(marker)
+        return idx if idx >= 0 else -1
 
     async def _call_worker(self, text: str, exam_id: str = None, chunk_index: int = 0) -> List[dict]:
         """Worker：调用 LLM API 进行详细解析"""
@@ -397,7 +363,7 @@ class ExamParser:
                 logger.warning(f"保存调试文件 {filename} 失败: {e}")
 
     
-    async def _fallback_parse(self, text: str, exam_id: str, year: int) -> List[Question]:
+    async def _fallback_parse(self, text: str, exam_id: str, year: str) -> List[Question]:
         """回退方案：传统的滑动窗口分块"""
         logger.info("使用回退方案：滑动窗口分块解析")
         
@@ -471,7 +437,7 @@ class ExamParser:
                 pass
             return []
     
-    def _post_process(self, raw_questions: List[dict], exam_id: str, year: int) -> List[Question]:
+    def _post_process(self, raw_questions: List[dict], exam_id: str, year: str) -> List[Question]:
         """后处理：校验、规范化、生成ID"""
         questions = []
         
@@ -488,7 +454,7 @@ class ExamParser:
     def _convert_dict_to_question(
         self, 
         q_dict: dict, 
-        year: int, 
+        year: str, 
         index: int, 
         parent_id: str = None,
         depth: int = 1

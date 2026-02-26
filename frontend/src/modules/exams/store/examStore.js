@@ -181,6 +181,15 @@ export const useExamStore = defineStore('exam', () => {
         }
     }
 
+    /** 更新试卷年份（解析后用户可编辑） */
+    async function updateExamYear(examId, year) {
+        await examService.updateExamYear(examId, year)
+        const index = exams.value.findIndex(e => e.exam_id === examId)
+        if (index !== -1) {
+            exams.value[index] = { ...exams.value[index], year: (year || '').trim() || 'Unknown' }
+        }
+    }
+
     /**
      * 开始轮询试卷状态
      */
@@ -257,6 +266,7 @@ export const useExamStore = defineStore('exam', () => {
         getExamDetail,
         deleteExam,
         reparseExam,
+        updateExamYear,
         startPolling,
         stopPolling,
         stopAllPolling,

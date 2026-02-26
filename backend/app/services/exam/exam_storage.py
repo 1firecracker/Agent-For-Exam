@@ -54,11 +54,11 @@ class ExamStorage:
         exam_dir.mkdir(parents=True, exist_ok=True)
         return exam_dir
     
-    def create_exam_entry(self, year: int, title: str = "", subject: str = "") -> str:
+    def create_exam_entry(self, year: str, title: str = "", subject: str = "") -> str:
         """创建新的试卷条目
-        
+
         Args:
-            year: 考试年份
+            year: 考试年份（字符串，如 "2024"、"Unknown"）
             title: 试卷标题
             subject: 科目名称
             
@@ -74,7 +74,7 @@ class ExamStorage:
         # 更新索引
         self._index[exam_id] = {
             "id": exam_id,
-            "year": year,
+            "year": str(year),
             "title": title,
             "subject": subject,
             "status": "pending",
@@ -98,9 +98,10 @@ class ExamStorage:
         pdf_path = exam_dir / f"source{ext}"
         pdf_path.write_bytes(pdf_content)
         
-        # 更新索引
+        # 更新索引（含原始文件名，供后续推断年份等）
         if exam_id in self._index:
             self._index[exam_id]["source_pdf_path"] = str(pdf_path)
+            self._index[exam_id]["original_filename"] = original_filename
             self._save_index()
         
         return pdf_path
@@ -150,6 +151,13 @@ class ExamStorage:
             if error_message:
                 self._index[exam_id]["error_message"] = error_message
             self._save_index()
+
+    def update_year(self, exam_id: str, year: str) -> None:
+        """更新试卷年份（如由文件名/内容推断后写回）"""
+        if exam_id in self._index:
+            self._index[exam_id]["year"] = str(year)
+            self._index[exam_id]["updated_at"] = datetime.utcnow().isoformat() + "Z"
+            self._save_index()
     
     def get_exam(self, exam_id: str) -> Optional[ExamPaper]:
         """获取完整试卷数据"""
@@ -159,31 +167,33 @@ class ExamStorage:
         if json_path.exists():
             with open(json_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                return ExamPaper(**data)
+            if "year" in data and data["year"] is not None:
+                data["year"] = str(data["year"])
+            return ExamPaper(**data)
         return None
     
     def get_exam_status(self, exam_id: str) -> Optional[dict]:
         """获取试卷状态信息"""
         return self._index.get(exam_id)
     
-    def list_exams(self, year: int = None, subject: str = None) -> List[ExamListItem]:
+    def list_exams(self, year: str = None, subject: str = None) -> List[ExamListItem]:
         """列出试卷
-        
+
         Args:
-            year: 按年份筛选
+            year: 按年份筛选（字符串）
             subject: 按科目筛选
         """
         items = []
         for exam_id, info in self._index.items():
             # 筛选条件
-            if year and info.get("year") != year:
+            if year and str(info.get("year", "")) != year:
                 continue
             if subject and info.get("subject") != subject:
                 continue
-            
+
             items.append(ExamListItem(
                 exam_id=exam_id,
-                year=info.get("year", 0),
+                year=str(info.get("year", "")),
                 title=info.get("title", ""),
                 subject=info.get("subject", ""),
                 question_count=info.get("question_count", 0),

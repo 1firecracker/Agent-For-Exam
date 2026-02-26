@@ -7,11 +7,14 @@ from app.services.exam_analysis.trace_storage import TraceStorage
 
 
 async def query_knowledge_base(subject_id: str, conversation_id: str, query: str) -> Dict[str, Any]:
-    """在讲义知识库中检索与 query 相关的内容。"""
-    graph = GraphService()
+    """在讲义知识库中检索与 query 相关的内容（aquery_data + 实体/关系/块+页码，与对话检索逻辑一致）。"""
+    service = GraphService()
     rag_id = subject_id or conversation_id
-    text = await graph.query(conversation_id, query, mode="mix", use_history=False)
-    return {"status": "success", "result": text or "未检索到相关内容"}
+    context_id = subject_id or conversation_id
+    result = await service.query_knowledge_raw(rag_id, query, "mix", context_id=context_id)
+    if result.get("status") == "success":
+        return {"status": "success", "result": result.get("result", "")}
+    return {"status": "success", "result": result.get("message", "未检索到相关内容")}
 
 
 def locate_knowledge_pages(subject_id: str, conversation_id: str, entity_or_keyword: str) -> Dict[str, Any]:
@@ -47,7 +50,7 @@ async def submit_draft_mapping(
         pages = kp.get("page_numbers")
         if not isinstance(pages, list):
             pages = [pages] if pages is not None else []
-        result = verify_draft_mapping(subject_id, name, doc_id, pages)
+        result = await verify_draft_mapping(subject_id, name, doc_id, pages)
         if result.get("status") != "accepted":
             failed.append({"point_name": name, "document_id": doc_id, "page_numbers": pages, "feedback": result.get("feedback", "")})
     if failed:

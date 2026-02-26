@@ -16,29 +16,37 @@
     </div>
     <el-collapse-transition>
       <div v-show="expanded" class="panel-body">
-        <div v-if="item.thinking_blocks?.length" class="thinking-blocks">
-          <div
-            v-for="(block, i) in item.thinking_blocks"
-            :key="i"
-            class="thinking-block"
-          >
-            <div class="thinking-title">{{ block.title }}</div>
-            <div class="thinking-content">{{ block.content }}</div>
-          </div>
+        <div v-if="traceEntries.length" class="trace-entries">
+          <template v-for="(entry, i) in traceEntries" :key="entry.key">
+            <div v-if="entry.type === 'thinking'" class="thinking-block">
+              <div class="thinking-title">{{ entry.data.title }}</div>
+              <div class="thinking-content">{{ entry.data.content }}</div>
+            </div>
+            <div v-else class="tool-call-item">
+              <div class="tool-call-header" @click.stop="toggleToolExpand(entry.key)">
+                <el-icon class="tool-expand-icon" :class="{ expanded: expandedToolKeys.has(entry.key) }">
+                  <ArrowRight />
+                </el-icon>
+                <span class="tool-name">{{ entry.data.name }}</span>
+                <el-tag size="small" :type="entry.data.status === 'success' ? 'success' : entry.data.status === 'error' ? 'danger' : 'info'">
+                  {{ entry.data.status }}
+                </el-tag>
+              </div>
+              <el-collapse-transition>
+                <div v-show="expandedToolKeys.has(entry.key)" v-if="hasResult(entry.data)" class="tool-result-wrap">
+                  <div class="tool-result">{{ typeof entry.data.result === 'string' ? entry.data.result : entry.data.result?.message }}</div>
+                </div>
+              </el-collapse-transition>
+            </div>
+          </template>
         </div>
-        <div v-if="item.tool_calls?.length" class="tool-calls">
-          <div class="tool-calls-title">工具调用</div>
-          <div
-            v-for="tc in item.tool_calls"
-            :key="tc.id"
-            class="tool-call-item"
-          >
-            <span class="tool-name">{{ tc.name }}</span>
-            <el-tag size="small" :type="tc.status === 'success' ? 'success' : tc.status === 'error' ? 'danger' : 'info'">
-              {{ tc.status }}
-            </el-tag>
-            <div v-if="tc.result?.message" class="tool-result">{{ tc.result.message }}</div>
-          </div>
+        <div v-if="children?.length" class="children-list">
+          <AgentTracePanel
+            v-for="child in children"
+            :key="child.agent_id"
+            :item="child"
+            :children="[]"
+          />
         </div>
       </div>
     </el-collapse-transition>
@@ -48,6 +56,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { ArrowRight } from '@element-plus/icons-vue'
+import AgentTracePanel from './AgentTracePanel.vue'
 
 const props = defineProps({
   item: {
@@ -60,10 +69,27 @@ const props = defineProps({
       thinking_blocks: [],
       tool_calls: []
     })
+  },
+  children: {
+    type: Array,
+    default: () => []
   }
 })
 
 const expanded = ref(true)
+// 每条工具调用默认折叠，点击展开 result
+const expandedToolKeys = ref(new Set())
+
+function toggleToolExpand(key) {
+  const next = new Set(expandedToolKeys.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  expandedToolKeys.value = next
+}
+
+function hasResult(data) {
+  return data?.result != null && (typeof data.result === 'string' ? data.result : data.result?.message) != null
+}
 
 const statusText = computed(() => {
   const m = { running: '运行中', done: '完成', failed: '失败' }
@@ -73,6 +99,21 @@ const statusText = computed(() => {
 const statusTagType = computed(() => {
   const m = { running: 'warning', done: 'success', failed: 'danger' }
   return m[props.item.status] || 'info'
+})
+
+const traceEntries = computed(() => {
+  const blocks = props.item.thinking_blocks || []
+  const calls = props.item.tool_calls || []
+  const hasStep = blocks.some(b => b.step != null) || calls.some(c => c.step != null)
+  const entries = []
+  blocks.forEach((b, i) => {
+    entries.push({ type: 'thinking', step: hasStep ? (b.step ?? i) : i, key: `t-${i}`, data: b })
+  })
+  calls.forEach((c, i) => {
+    entries.push({ type: 'tool_call', step: hasStep ? (c.step ?? 1000 + i) : 1000 + i, key: `c-${c.id || i}`, data: c })
+  })
+  entries.sort((a, b) => a.step - b.step)
+  return entries
 })
 </script>
 
@@ -120,7 +161,7 @@ const statusTagType = computed(() => {
   padding: 0 12px 12px;
   border-top: 1px solid var(--border-subtle);
 }
-.thinking-blocks {
+.trace-entries {
   padding-top: 12px;
   display: flex;
   flex-direction: column;
@@ -139,22 +180,7 @@ const statusTagType = computed(() => {
   white-space: pre-wrap;
   word-break: break-word;
 }
-.tool-calls {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-subtle);
-}
-.tool-calls-title {
-  font-size: 13px;
-  font-weight: 600;
-  margin-bottom: 8px;
-  color: var(--text-secondary);
-}
 .tool-call-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
   font-size: 13px;
   padding: 6px 0;
   border-bottom: 1px solid var(--border-subtle);
@@ -162,14 +188,43 @@ const statusTagType = computed(() => {
 .tool-call-item:last-child {
   border-bottom: none;
 }
+.tool-call-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.tool-call-header:hover {
+  color: var(--text-secondary);
+}
+.tool-expand-icon {
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+.tool-expand-icon.expanded {
+  transform: rotate(90deg);
+}
 .tool-name {
   font-weight: 500;
   color: var(--text-primary);
 }
+.tool-result-wrap {
+  padding-left: 20px;
+  margin-top: 4px;
+}
 .tool-result {
-  width: 100%;
   font-size: 12px;
   color: var(--text-tertiary);
-  margin-top: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.children-list {
+  margin-top: 12px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 </style>

@@ -108,6 +108,18 @@ class ChatService {
     })
   }
   
+  async saveDocMessage(conversationId, type, filename, pageNumber, fileExtension, fileId, imageUrl = null, baseTimestamp = null) {
+    await api.post(`/api/conversations/${conversationId}/messages/doc`, {
+      type,
+      filename,
+      pageNumber,
+      fileExtension,
+      fileId,
+      imageUrl,
+      baseTimestamp
+    })
+  }
+  
   async resetHistory(conversationId, index) {
     const response = await api.post(`/api/conversations/${conversationId}/messages/reset`, {
       index

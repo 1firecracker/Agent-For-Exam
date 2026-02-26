@@ -289,6 +289,84 @@ class ConversationService:
         conversation_dir = self.get_conversation_dir(conversation_id)
         return conversation_dir / "messages.json"
     
+    def add_doc_message(self, conversation_id: str, message_type: str, filename: str, page_number: int, file_extension: str, file_id: str, image_url: Optional[str] = None, base_timestamp: Optional[str] = None) -> bool:
+        """添加文档附件消息到对话历史（doc-highlight 或 doc-image）
+        
+        Args:
+            conversation_id: 对话ID
+            message_type: 消息类型，'doc-highlight' 或 'doc-image'
+            filename: 文件名
+            page_number: 页码
+            file_extension: 文件扩展名
+            file_id: 文件ID
+            image_url: 图片URL（仅当 message_type 为 'doc-image' 时需要）
+            base_timestamp: 基础时间戳（可选），用于确保多个 doc-* 消息按顺序排列
+            
+        Returns:
+            是否成功
+        """
+        messages_file = self._get_messages_file(conversation_id)
+        messages_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # 加载现有消息
+        messages = []
+        if messages_file.exists():
+            try:
+                with open(messages_file, 'r', encoding='utf-8') as f:
+                    messages = json.load(f)
+            except:
+                messages = []
+        
+        # 计算时间戳：如果有 base_timestamp，使用它；否则使用当前时间减去一个小的偏移量
+        # 这样可以确保 doc-* 消息排在用户消息之前
+        from datetime import timedelta
+        
+        if base_timestamp:
+            # 解析基础时间戳，并添加一个微小的偏移量（基于已有 doc-* 消息的数量）
+            try:
+                base_dt = datetime.fromisoformat(base_timestamp.replace('Z', '+00:00'))
+                # 计算已有多少个 doc-* 消息，用于创建时间偏移
+                doc_count = sum(1 for m in messages if m.get('role') == 'system' and m.get('type') in ['doc-highlight', 'doc-image'])
+                # 每个 doc-* 消息之间间隔 1 毫秒
+                offset_ms = doc_count
+                timestamp_dt = base_dt - timedelta(milliseconds=offset_ms)
+                timestamp = timestamp_dt.isoformat().replace('+00:00', 'Z')
+            except:
+                # 如果解析失败，使用当前时间
+                timestamp = datetime.utcnow().isoformat() + "Z"
+        else:
+            # 如果没有 base_timestamp，使用当前时间减去一个偏移量
+            # 确保 doc-* 消息排在用户消息之前
+            now = datetime.utcnow()
+            doc_count = sum(1 for m in messages if m.get('role') == 'system' and m.get('type') in ['doc-highlight', 'doc-image'])
+            # 每个 doc-* 消息之间间隔 1 毫秒，整体比当前时间早 1 秒
+            offset_ms = 1000 + doc_count  # 1000ms = 1秒，确保排在用户消息之前
+            timestamp_dt = now - timedelta(milliseconds=offset_ms)
+            timestamp = timestamp_dt.isoformat() + "Z"
+        
+        # 构建文档消息
+        doc_message = {
+            "role": "system",
+            "type": message_type,
+            "filename": filename,
+            "pageNumber": page_number,
+            "fileExtension": file_extension,
+            "fileId": file_id,
+            "timestamp": timestamp
+        }
+        
+        # 如果是图片类型，添加 imageUrl
+        if message_type == "doc-image" and image_url:
+            doc_message["imageUrl"] = image_url
+        
+        messages.append(doc_message)
+        
+        # 保存消息
+        with open(messages_file, 'w', encoding='utf-8') as f:
+            json.dump(messages, f, ensure_ascii=False, indent=2)
+        
+        return True
+    
     def add_message(self, conversation_id: str, query: str, answer: str, tool_calls: Optional[List[dict]] = None, stream_items: Optional[List[dict]] = None) -> bool:
         """添加消息到对话历史
         
@@ -411,7 +489,7 @@ class ConversationService:
             conversation_id: 对话ID
             
         Returns:
-            消息列表
+            消息列表（按时间戳排序）
         """
         messages_file = self._get_messages_file(conversation_id)
         
@@ -421,7 +499,19 @@ class ConversationService:
         try:
             with open(messages_file, 'r', encoding='utf-8') as f:
                 messages = json.load(f)
-                return messages if isinstance(messages, list) else []
+                if not isinstance(messages, list):
+                    return []
+                
+                # 按时间戳排序，确保消息按正确顺序显示
+                def get_timestamp(msg):
+                    timestamp = msg.get('timestamp', '')
+                    # 如果没有 timestamp，使用一个很旧的时间戳，确保排在前面
+                    if not timestamp:
+                        return '1970-01-01T00:00:00Z'
+                    return timestamp
+                
+                messages.sort(key=get_timestamp)
+                return messages
         except:
             return []
 

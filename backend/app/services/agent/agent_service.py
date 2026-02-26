@@ -37,7 +37,7 @@ from app.services.agent.tool_executor import ToolExecutor
 from app.services.agent.tools.mindmap_tool import MINDMAP_TOOL
 from app.services.agent.tools.query_tool import QUERY_TOOL
 from app.services.agent.tools.list_documents_tool import LIST_DOCUMENTS_TOOL
-from app.services.agent.tools.skill_tools import READ_SKILL_TOOL
+from app.services.agent.tools.read_tool import READ_TOOL
 from app.services.lightrag_service import LightRAGService
 from app.services.memory_service import MemoryService
 import app.config as config
@@ -66,9 +66,7 @@ class AgentService:
         self.tool_registry.register(MINDMAP_TOOL)
         self.tool_registry.register(QUERY_TOOL)
         self.tool_registry.register(LIST_DOCUMENTS_TOOL)
-        
-        # 技能管理工具（渐进式披露）
-        self.tool_registry.register(READ_SKILL_TOOL)
+        self.tool_registry.register(READ_TOOL)
         
         logger.info(
             "Agent 服务初始化完成",
@@ -83,9 +81,7 @@ class AgentService:
         """构建 Agent 系统提示词
         
         自动注入技能元数据（name + description）到 System Prompt，
-        符合 Claude Code 的渐进式披露机制：
-        - Level 1: 元数据自动注入（本方法）
-        - Level 2: 详细说明按需加载（read_skill_instructions 工具）
+        技能元数据（name + description）自动注入到 System Prompt。
         """
         # 获取工具描述
         tools_description = []
@@ -102,20 +98,16 @@ class AgentService:
 
 {skills_snippet}
 
-**渐进式披露规则**：
-- 上述技能列表仅显示名称和简要描述
-- 如果你需要了解某个技能的详细参数和使用方法，调用 `read_skill_instructions` 工具获取完整说明
-- 对于简单任务可直接使用工具，复杂任务建议先读取技能说明
-
 基本使用规则：
 1. 根据用户的需求，智能选择合适的工具
 2. 如果用户明确要求执行某个操作（如"生成思维导图"、"画脑图"等），使用 generate_mindmap 工具, 若指名具体文档, 需要注意应该查询文档列表并注入文档参数
 3. 如果用户想要查询文档内容，使用 query_knowledge_graph 工具
 4. 如果用户想要查看文档列表（如"列出所有文档"、"显示文档"等），使用 list_documents 工具
-5. 不要向用户透露工具名称，用自然语言描述操作 仅在必要时调用工具 如果任务简单或已知答案，直接回答，无需调用工具
-6. **工具调用后，如果结果提示需要进一步操作，可以继续调用其他工具**
-7. **只有在完成所有必要的工具调用后，才生成最终回答**
-8. 工具调用后，将结果整合到回答中，以自然的方式呈现给用户
+5. 如果用户要阅读某份文档的指定页码范围（如「读某文档第3页到第5页」），使用 read 工具，参数为文档名（filename）、起始页码（start_page）、终止页码（end_page）；文档名须与 list_documents 返回的 filename 完全一致
+6. 不要向用户透露工具名称，用自然语言描述操作 仅在必要时调用工具 如果任务简单或已知答案，直接回答，无需调用工具
+7. **工具调用后，如果结果提示需要进一步操作，可以继续调用其他工具**
+8. **只有在完成所有必要的工具调用后，才生成最终回答**
+9. 工具调用后，将结果整合到回答中，以自然的方式呈现给用户
 
 搜索和阅读原则:
 - 不确定时先收集信息（搜索、读取文件等）
@@ -139,6 +131,7 @@ class AgentService:
 - 生成思维导图：调用 generate_mindmap，参数可以为空 {{}} 或指定文档 {{"document_ids": ["file_id1", "file_id2"]}}（不要包含 conversation_id）
   **重要：document_ids 必须使用 file_id（文档ID），而不是 filename（文件名）。可以通过 list_documents 工具获取每个文档的 file_id。**
 - 查询知识图谱：调用 query_knowledge_graph，参数 {{"query": "用户的问题", "mode": "mix"}}（不要包含 conversation_id）
+- 阅读文档某几页：调用 read，参数 {{"filename": "文档名（与 list_documents 一致）", "start_page": 1, "end_page": 5}}（不要包含 conversation_id）
 
 
 引用与信息来源标注规范
@@ -1259,13 +1252,16 @@ class AgentService:
                 # 提取主要信息
                 message = tool_result.get("message", "执行成功")
                 result_content = tool_result.get("result", "")
+                body_content = tool_result.get("content", "")  # read 等工具返回正文在 content
                 mindmap_content = tool_result.get("mindmap_content", "")
                 
                 # 构建格式化结果
-                formatted = f"执行成功。{message}"
+                formatted = f"执行成功。{message}" if message else "执行成功。"
                 
                 # 如果有实际结果内容，添加到格式化字符串中
-                if result_content:
+                if body_content:
+                    formatted += f"\n\n内容：\n{body_content}" if isinstance(body_content, str) else f"\n\n内容：{str(body_content)}"
+                elif result_content:
                     if isinstance(result_content, str):
                         formatted += f"\n\n查询结果：\n{result_content}"
                     else:

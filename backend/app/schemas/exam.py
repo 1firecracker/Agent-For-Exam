@@ -45,7 +45,7 @@ class Question(BaseModel):
 class ExamPaper(BaseModel):
     """完整试卷的结构化表示"""
     id: str = Field(..., description="试卷唯一ID (UUID)")
-    year: int = Field(..., ge=1900, le=2100, description="考试年份")
+    year: str = Field(..., description="考试年份")
     title: str = Field(default="", description="试卷标题")
     subject: str = Field(default="", description="科目名称")
     total_score: Optional[float] = Field(default=None, ge=0, description="试卷总分")
@@ -87,7 +87,7 @@ class ExamStatusResponse(BaseModel):
 class ExamListItem(BaseModel):
     """试卷列表项（简化信息）"""
     exam_id: str
-    year: int
+    year: str
     title: str
     subject: str
     question_count: int

@@ -399,7 +399,145 @@ class GraphService:
         except Exception:
             # 解析失败，假设不为空
             return False, False
-    
+
+    async def query_knowledge_raw(
+        self,
+        rag_id: str,
+        query: str,
+        mode: str = "mix",
+        *,
+        context_id: Optional[str] = None,
+        max_entities: int = 10,
+        max_relationships: int = 10,
+        max_chunks: int = 5,
+    ) -> Dict[str, Any]:
+        """知识图谱原始检索 + 格式化（aquery_data，不含 LLM 成文）。供对话与试题分析复用。"""
+        valid_modes = ["naive", "local", "global", "mix"]
+        if mode not in valid_modes:
+            return {"status": "error", "message": f"无效的查询模式: {mode}", "result": ""}
+        ctx = context_id or rag_id
+        try:
+            lightrag = await self.lightrag_service.get_lightrag_for_conversation(rag_id)
+            from lightrag import QueryParam
+            param = QueryParam(mode=mode)
+            query_data = await lightrag.aquery_data(query, param=param)
+            if not isinstance(query_data, dict) or query_data.get("status") != "success":
+                err = query_data.get("message", "查询失败") if isinstance(query_data, dict) else "查询失败"
+                return {"status": "error", "message": err, "result": ""}
+            data = query_data.get("data", {})
+            entities = data.get("entities", [])
+            relationships = data.get("relationships", [])
+            chunks = data.get("chunks", [])
+            metadata = query_data.get("metadata", {})
+            result_parts = []
+            query_mode = metadata.get("query_mode", mode)
+            keywords = metadata.get("keywords", {})
+            high_level = keywords.get("high_level", [])
+            low_level = keywords.get("low_level", [])
+            result_parts.append(f"查询模式: {query_mode}")
+            if high_level:
+                result_parts.append(f"高级关键词: {', '.join(high_level)}")
+            if low_level:
+                result_parts.append(f"低级关键词: {', '.join(low_level)}")
+            entity_page_map = self.load_entity_page_mapping(rag_id)
+            enriched_entities = []
+            if entities:
+                result_parts.append(f"\n找到 {len(entities)} 个相关实体:")
+            for i, entity in enumerate(entities[:max_entities], 1):
+                entity_name = entity.get("entity_name", "")
+                entity_type = entity.get("entity_type", "")
+                description = entity.get("description", "")
+                source_id = entity.get("source_id", "")
+                file_id = None
+                page_index = None
+                if entity_name and entity_name in entity_page_map:
+                    cands = entity_page_map[entity_name]
+                    if cands:
+                        best = cands[0]
+                        file_id = best.get("file_id")
+                        page_index = best.get("page_index")
+                if (not file_id or page_index is None) and source_id:
+                    chunks_info = await self._get_source_chunks_info(lightrag, source_id, ctx)
+                    if chunks_info:
+                        with_page = [c for c in chunks_info if c.get("page_index") is not None]
+                        if with_page:
+                            sel = min(with_page, key=lambda x: x.get("page_index", 9999))
+                            file_id = sel.get("file_id")
+                            page_index = sel.get("page_index")
+                        else:
+                            fc = chunks_info[0]
+                            file_id = fc.get("file_id")
+                            page_index = fc.get("page_index")
+                enriched_entity = entity.copy()
+                if file_id:
+                    enriched_entity["file_id"] = file_id
+                if page_index is not None:
+                    enriched_entity["page_index"] = page_index
+                enriched_entities.append(enriched_entity)
+                disp = f"{i}. {entity_name} ({entity_type})"
+                if file_id and page_index is not None:
+                    disp += f" [来源: {file_id[:]}  | 第{page_index}页]"
+                elif file_id:
+                    disp += f" [来源: {file_id[:]}]"
+                if description:
+                    result_parts.append(f"{disp}: {description}")
+                else:
+                    result_parts.append(disp)
+            enriched_rels = []
+            if relationships:
+                result_parts.append(f"\n找到 {len(relationships)} 个相关关系:")
+                for i, rel in enumerate(relationships[:max_relationships], 1):
+                    src = rel.get("src_id", "")
+                    tgt = rel.get("tgt_id", "")
+                    desc = rel.get("description", "")
+                    enriched_rels.append(rel)
+                    if desc:
+                        result_parts.append(f"{i}. {src} -> {tgt}: {desc}")
+                    else:
+                        result_parts.append(f"{i}. {src} -> {tgt}")
+            enriched_chunks = []
+            if chunks:
+                result_parts.append(f"\n找到 {len(chunks)} 个相关文本块:")
+                for i, chunk in enumerate(chunks[:max_chunks], 1):
+                    content = chunk.get("content", "")
+                    chunk_id = chunk.get("chunk_id") or chunk.get("id", "")
+                    file_id = None
+                    page_index = None
+                    if chunk_id:
+                        chunks_info = await self._get_source_chunks_info(lightrag, chunk_id, ctx)
+                        if chunks_info:
+                            fc = chunks_info[0]
+                            file_id = fc.get("file_id")
+                            page_index = fc.get("page_index")
+                    enriched_chunk = chunk.copy()
+                    if file_id:
+                        enriched_chunk["file_id"] = file_id
+                    if page_index is not None:
+                        enriched_chunk["page_index"] = page_index
+                    enriched_chunks.append(enriched_chunk)
+                    if content:
+                        preview = content[:200] + "..." if len(content) > 200 else content
+                        cd = f"{i}. {preview}"
+                        if file_id and page_index is not None:
+                            cd += f" [来源: {file_id[:]} | 第{page_index}页]"
+                        elif file_id:
+                            cd += f" [来源: {file_id[:]}]"
+                        result_parts.append(cd)
+            formatted = "\n".join(result_parts)
+            return {
+                "status": "success",
+                "message": f"查询完成（模式: {mode}），找到 {len(entities)} 个实体，{len(relationships)} 个关系，{len(chunks)} 个文本块",
+                "result": formatted,
+                "raw_data": {
+                    "entities": enriched_entities,
+                    "relationships": enriched_rels if relationships else relationships,
+                    "chunks": enriched_chunks if chunks else chunks,
+                    "metadata": metadata,
+                },
+            }
+        except Exception as e:
+            return {"status": "error", "message": str(e), "result": ""}
+
     async def query(self, conversation_id: str, query: str, mode: str = "mix", use_history: bool = True) -> str:
         """在对话的知识图谱中查询
         

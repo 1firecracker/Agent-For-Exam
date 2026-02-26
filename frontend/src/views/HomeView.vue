@@ -50,7 +50,7 @@
           <div class="card-content">
             <h3 class="subject-title" :title="subject.name">{{ subject.name }}</h3>
             <div class="subject-meta">
-              <el-tag size="small" type="info" effect="plain" round>0 Docs</el-tag>
+              <el-tag size="small" type="info" effect="plain" round>{{ getDocCount(subject.subject_id) }} Docs</el-tag>
               <span class="date">{{ formatDate(subject.created_at) }}</span>
             </div>
           </div>
@@ -84,13 +84,18 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Collection, Plus, MoreFilled } from '@element-plus/icons-vue'
 import { useSubjectStore } from '../modules/subjects/store/subjectStore'
+import { useDocumentStore } from '../modules/documents/store/documentStore'
 
 const router = useRouter()
 const subjectStore = useSubjectStore()
+const docStore = useDocumentStore()
 
 onMounted(async () => {
   await subjectStore.loadSubjects()
+  await Promise.all(subjectStore.subjects.map(s => docStore.loadDocumentsForSubject(s.subject_id)))
 })
+
+const getDocCount = (subjectId) => docStore.getDocumentCountBySubject(subjectId)
 
 const createNewSubject = async () => {
   const { value: title } = await ElMessageBox.prompt('Please enter the subject name', 'New Subject', {

@@ -166,7 +166,22 @@
                 {{ exam.title || 'Untitled' }}
               </h3>
               <div class="doc-meta">
-                <span class="doc-year" v-if="exam.year">{{ exam.year }}年</span>
+                <template v-if="editingYearId === exam.exam_id">
+                  <el-input
+                    v-model="editYearValue"
+                    size="small"
+                    placeholder="年份"
+                    class="year-input-inline"
+                    style="width: 72px; margin-right: 4px;"
+                    @keyup.enter="saveYearEdit(exam.exam_id)"
+                  />
+                  <el-button link type="primary" size="small" @click="saveYearEdit(exam.exam_id)">保存</el-button>
+                  <el-button link size="small" @click="editingYearId = null">取消</el-button>
+                </template>
+                <template v-else>
+                  <span class="doc-year" v-if="exam.year">{{ exam.year }}年</span>
+                  <el-button link type="primary" size="small" class="edit-year-btn" @click="startYearEdit(exam)">编辑年份</el-button>
+                </template>
                 <span class="doc-status" :class="exam.status">
                   <span class="status-dot"></span>
                   {{ getExamStatusText(exam.status) }}
@@ -254,7 +269,11 @@
     >
       <div v-if="selectedExamDetail" class="exam-detail-content">
         <div class="exam-meta">
-          <p><strong>Year:</strong> {{ selectedExamDetail.year }}</p>
+          <p class="exam-meta-row">
+            <strong>Year:</strong>
+            <el-input v-model="yearEditValue" size="small" placeholder="年份" style="width: 100px; margin-left: 8px;" />
+            <el-button type="primary" size="small" style="margin-left: 8px;" @click="saveDetailYear">保存年份</el-button>
+          </p>
           <p><strong>Title:</strong> {{ selectedExamDetail.title }}</p>
           <p><strong>Total Questions:</strong> {{ selectedExamDetail.questions?.length || 0 }}</p>
         </div>
@@ -321,11 +340,16 @@ const docStore = useDocumentStore()
 const subjectStore = useSubjectStore()
 const examStore = useExamStore()
 
-const subjectId = route.params.id
+const subjectId = computed(() => route.params.id ?? null)
 
 // 试卷详情抽屉
 const examDetailDrawerVisible = ref(false)
 const selectedExamDetail = ref(null)
+const yearEditValue = ref('') // 详情抽屉内编辑年份
+
+// 列表卡片内编辑年份
+const editingYearId = ref(null)
+const editYearValue = ref('')
 
 // 试题分析弹窗：勾选试卷
 const examAnalysisDialogVisible = ref(false)
@@ -339,7 +363,7 @@ const currentSubjectName = computed(() => {
 })
 
 const currentDocuments = computed(() => {
-  return subjectId ? docStore.getDocumentsBySubject(subjectId) : []
+  return subjectId.value ? docStore.getDocumentsBySubject(subjectId.value) : []
 })
 
 const currentExams = computed(() => {
@@ -366,13 +390,11 @@ const examQuestionsTree = computed(() => {
 })
 
 onMounted(async () => {
-  if (subjectId) {
-    // 加载知识库信息
+  const id = subjectId.value
+  if (id) {
     await subjectStore.loadSubjects()
-    subjectStore.selectSubject(subjectId)
-    // 加载该知识库的文档
-    await docStore.loadDocumentsForSubject(subjectId)
-    // 加载试卷列表（按科目过滤）
+    subjectStore.selectSubject(id)
+    await docStore.loadDocumentsForSubject(id)
     await examStore.loadExams({ subject: currentSubjectName.value })
   }
 })
@@ -383,24 +405,25 @@ onUnmounted(() => {
 })
 
 // 监听路由变化，如果 ID 变了，重新加载
-watch(() => route.params.id, async (newId) => {
+watch(() => route.params.id, async (newId, oldId) => {
   if (newId) {
     await subjectStore.loadSubjects()
     subjectStore.selectSubject(newId)
     await docStore.loadDocumentsForSubject(newId)
     await examStore.loadExams({ subject: currentSubjectName.value })
-  } else {
-    docStore.clearDocumentsForSubject(subjectId)
+  } else if (oldId) {
+    docStore.clearDocumentsForSubject(oldId)
   }
 })
 
 const startChat = async () => {
-  if (!subjectId) return
-  const conv = await subjectService.createConversationForSubject(subjectId)
+  const id = subjectId.value
+  if (!id) return
+  const conv = await subjectService.createConversationForSubject(id)
   if (!conv || !conv.conversation_id) return
   await convStore.refreshConversation(conv.conversation_id)
   convStore.selectConversation(conv.conversation_id)
-  router.push(`/subject/${subjectId}/chat/${conv.conversation_id}`)
+  router.push(`/subject/${id}/chat/${conv.conversation_id}`)
 }
 
 function openExamAnalysisDialog() {
@@ -420,11 +443,12 @@ function deselectAllExams() {
 }
 
 async function confirmExamAnalysis() {
-  if (!subjectId || selectedExamIds.value.length === 0) {
+  const id = subjectId.value
+  if (!id || selectedExamIds.value.length === 0) {
     ElMessage.warning('请至少选择一份试卷')
     return
   }
-  const conv = await subjectService.createConversationForSubject(subjectId, '试题分析', {
+  const conv = await subjectService.createConversationForSubject(id, '试题分析', {
     conversation_type: 'exam_analysis',
     selected_exam_ids: selectedExamIds.value
   })
@@ -432,7 +456,7 @@ async function confirmExamAnalysis() {
   examAnalysisDialogVisible.value = false
   await convStore.refreshConversation(conv.conversation_id)
   convStore.selectConversation(conv.conversation_id)
-  router.push(`/subject/${subjectId}/chat/${conv.conversation_id}`)
+  router.push(`/subject/${id}/chat/${conv.conversation_id}`)
 }
 
 const getFileType = (filename) => {
@@ -475,14 +499,15 @@ const handleBeforeCoursewareUpload = (file) => {
 
 const handleCoursewareUpload = async (options) => {
   const { file } = options
-  if (!subjectId) {
+  const id = subjectId.value
+  if (!id) {
     ElMessage.error('Cannot upload: Subject ID is missing.')
     return
   }
   try {
-    await docStore.uploadDocumentsForSubject(subjectId, file)
+    await docStore.uploadDocumentsForSubject(id, file)
     ElMessage.success('Upload started')
-    await docStore.loadDocumentsForSubject(subjectId)
+    await docStore.loadDocumentsForSubject(id)
   } catch (error) {
     console.error('Upload failed:', error)
     ElMessage.error('Upload failed')
@@ -491,8 +516,9 @@ const handleCoursewareUpload = async (options) => {
 
 const testGetDocumentStatus = async (fileId) => {
   try {
-    if (!subjectId) return
-    const status = await docStore.getDocumentStatusForSubject(subjectId, fileId)
+    const id = subjectId.value
+    if (!id) return
+    const status = await docStore.getDocumentStatusForSubject(id, fileId)
     ElMessage.info(`Current status: ${status.status}`)
   } catch (error) {
     console.error('Get status failed:', error)
@@ -538,9 +564,38 @@ const viewExamDetail = async (examId) => {
   try {
     const detail = await examStore.getExamDetail(examId)
     selectedExamDetail.value = detail
+    yearEditValue.value = detail.year || ''
   } catch (error) {
     console.error('Failed to load exam detail:', error)
     ElMessage.error('Failed to load exam details')
+  }
+}
+
+function startYearEdit(exam) {
+  editingYearId.value = exam.exam_id
+  editYearValue.value = exam.year || ''
+}
+
+async function saveYearEdit(examId) {
+  const val = (editYearValue.value || '').trim() || 'Unknown'
+  try {
+    await examStore.updateExamYear(examId, val)
+    ElMessage.success('年份已更新')
+    editingYearId.value = null
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '更新失败')
+  }
+}
+
+async function saveDetailYear() {
+  if (!selectedExamDetail.value?.id) return
+  const val = (yearEditValue.value || '').trim() || 'Unknown'
+  try {
+    await examStore.updateExamYear(selectedExamDetail.value.id, val)
+    selectedExamDetail.value = { ...selectedExamDetail.value, year: val }
+    ElMessage.success('年份已更新')
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '更新失败')
   }
 }
 
