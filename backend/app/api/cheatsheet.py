@@ -12,6 +12,7 @@ router = APIRouter(tags=["cheatsheet"])
 class CheatsheetRequest(BaseModel):
     include_images: bool = False
     file_ids: Optional[List[str]] = None
+    custom_prompt: Optional[str] = None
 
 
 @router.post("/api/subjects/{subject_id}/cheatsheet/generate")
@@ -20,7 +21,9 @@ async def generate_cheatsheet(subject_id: str, request: CheatsheetRequest):
     service = CheatsheetService()
 
     return StreamingResponse(
-        service.generate_stream(subject_id, request.include_images, request.file_ids),
+        service.generate_stream(
+            subject_id, request.include_images, request.file_ids, request.custom_prompt
+        ),
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

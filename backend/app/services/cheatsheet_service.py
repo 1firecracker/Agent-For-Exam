@@ -63,7 +63,7 @@ class CheatsheetService:
                 })
         return refs
 
-    def _build_prompt(self, documents: List[Dict], include_images: bool) -> str:
+    def _build_prompt(self, documents: List[Dict], include_images: bool, custom_prompt: Optional[str] = None) -> str:
         combined = ""
         for doc in documents:
             combined += f"\n=== 文档: {doc['filename']} ===\n{doc['text']}\n"
@@ -73,15 +73,19 @@ class CheatsheetService:
             image_instruction = """
 - 在每个章节标题后使用 <!-- PAGE:file_id:page --> 标记表示关联的文档页码，前端会自动替换为图片。"""
 
+        user_instruction = ""
+        if custom_prompt:
+            user_instruction = f"\n- 用户额外要求：{custom_prompt}"
+
         return f"""你是一名教学助手，请根据以下讲义内容，生成一份紧凑的考试速查表（Cheatsheet）。
 
 要求：
-- 使用 Markdown 格式输出
+- 使用 Markdown 格式输出，不要用 ```markdown 代码块包裹
 - 用 ## 分章节/主题
 - 用 - 列要点，每个要点一句话概括核心知识
 - 信息要密集紧凑，不要冗余解释
 - 保留关键公式、定义、数据
-- 使用中文输出（如果原文是中文）{image_instruction}
+- 使用中文输出（如果原文是中文）{image_instruction}{user_instruction}
 
 讲义内容：
 {combined}"""
@@ -91,6 +95,7 @@ class CheatsheetService:
         subject_id: str,
         include_images: bool = False,
         file_ids: Optional[List[str]] = None,
+        custom_prompt: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """流式生成 cheatsheet（NDJSON 格式）"""
         documents = self._collect_document_texts(subject_id, file_ids)
@@ -102,7 +107,7 @@ class CheatsheetService:
         if include_images:
             image_refs = self._collect_image_refs(subject_id, documents)
 
-        prompt = self._build_prompt(documents, include_images)
+        prompt = self._build_prompt(documents, include_images, custom_prompt)
 
         from app.services.config_service import config_service
         chat_config = config_service.get_config("chat")

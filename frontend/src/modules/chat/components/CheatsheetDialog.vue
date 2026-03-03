@@ -41,6 +41,18 @@
           <el-switch v-model="includeImages" />
         </div>
 
+        <div class="setting-item">
+          <label>自定义提示词</label>
+          <el-input
+            v-model="customPrompt"
+            type="textarea"
+            :rows="3"
+            placeholder="例如：重点关注公式和定义；只总结第3章；用英文输出..."
+            resize="vertical"
+            size="small"
+          />
+        </div>
+
         <el-divider />
 
         <!-- 文档选择区 -->
@@ -120,6 +132,7 @@ const includeImages = ref(false)
 const editMode = ref(false)
 const generating = ref(false)
 const imageRefs = ref([])
+const customPrompt = ref('')
 const measureRef = ref(null)
 const pageHtmls = ref([])
 const docList = ref([])
@@ -292,7 +305,11 @@ async function handleGenerate() {
   try {
     const resp = await fetch(`${BASE_URL}/api/subjects/${props.subjectId}/cheatsheet/generate`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ include_images: includeImages.value, file_ids: selectedFileIds.value }),
+      body: JSON.stringify({
+        include_images: includeImages.value,
+        file_ids: selectedFileIds.value,
+        custom_prompt: customPrompt.value || null,
+      }),
     })
     const reader = resp.body.getReader()
     const decoder = new TextDecoder()
