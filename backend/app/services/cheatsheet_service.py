@@ -17,11 +17,15 @@ class CheatsheetService:
     def __init__(self):
         self.document_parser = DocumentParser()
 
-    def _collect_document_texts(self, subject_id: str) -> List[Dict]:
-        """收集知识库下所有文档的文本和元信息"""
+    def _collect_document_texts(self, subject_id: str, file_ids: Optional[List[str]] = None) -> List[Dict]:
+        """收集知识库下文档的文本和元信息，可按 file_ids 过滤"""
         from app.services.document_service import DocumentService
         doc_service = DocumentService()
         documents = doc_service.list_documents_for_subject(subject_id)
+
+        if file_ids:
+            id_set = set(file_ids)
+            documents = [d for d in documents if d.get("file_id") in id_set]
 
         results = []
         for doc in documents:
@@ -86,9 +90,10 @@ class CheatsheetService:
         self,
         subject_id: str,
         include_images: bool = False,
+        file_ids: Optional[List[str]] = None,
     ) -> AsyncGenerator[str, None]:
         """流式生成 cheatsheet（NDJSON 格式）"""
-        documents = self._collect_document_texts(subject_id)
+        documents = self._collect_document_texts(subject_id, file_ids)
         if not documents:
             yield json.dumps({"error": "当前知识库没有可用的文档"}) + "\n"
             return

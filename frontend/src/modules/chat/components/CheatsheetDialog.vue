@@ -42,9 +42,22 @@
         </div>
 
         <el-divider />
-        <el-button type="primary" :loading="generating" :disabled="generating"
+
+        <!-- 文档选择区 -->
+        <div class="setting-item">
+          <label>选择文档</label>
+          <div v-if="docList.length === 0" class="doc-empty">暂无已完成的文档</div>
+          <el-checkbox-group v-else v-model="selectedFileIds" class="doc-check-list">
+            <el-checkbox v-for="d in docList" :key="d.file_id" :value="d.file_id" :label="d.file_id" class="doc-check-item">
+              <span class="doc-name" :title="d.filename">{{ d.filename }}</span>
+            </el-checkbox>
+          </el-checkbox-group>
+        </div>
+
+        <el-button type="primary" :loading="generating"
+          :disabled="generating || selectedFileIds.length === 0"
           style="width:100%;border-radius:8px" @click="handleGenerate">
-          {{ generating ? '生成中...' : '生成 Cheatsheet' }}
+          {{ generating ? '生成中...' : `生成 Cheatsheet (${selectedFileIds.length})` }}
         </el-button>
         <el-button style="width:100%;margin-top:8px;margin-left:0;border-radius:8px" @click="handleExportPDF">
           导出 PDF
@@ -94,7 +107,10 @@ const emit = defineEmits(['update:modelValue'])
 
 const visible = ref(false)
 watch(() => props.modelValue, v => { visible.value = v })
-watch(visible, v => emit('update:modelValue', v))
+watch(visible, v => {
+  emit('update:modelValue', v)
+  if (v) loadDocList()
+})
 
 const pageSize = ref('A4')
 const marginMm = ref(10)
@@ -106,8 +122,21 @@ const generating = ref(false)
 const imageRefs = ref([])
 const measureRef = ref(null)
 const pageHtmls = ref([])
+const docList = ref([])
+const selectedFileIds = ref([])
 
 const MM_TO_PX = 96 / 25.4
+
+async function loadDocList() {
+  if (!props.subjectId) return
+  try {
+    const resp = await fetch(`${BASE_URL}/api/subjects/${props.subjectId}/documents`)
+    const data = await resp.json()
+    const docs = (data.documents || []).filter(d => d.status === 'completed')
+    docList.value = docs
+    selectedFileIds.value = docs.map(d => d.file_id)
+  } catch { docList.value = []; selectedFileIds.value = [] }
+}
 
 function buildPlaceholder() {
   const langs = [
@@ -180,7 +209,11 @@ const pageContentStyle = computed(() => ({
 
 const renderedHtml = computed(() => {
   if (!markdownContent.value) return ''
-  let html = marked.parse(markdownContent.value)
+  // Strip ```markdown ... ``` code fences that LLM sometimes wraps output in
+  let md = markdownContent.value
+    .replace(/^```(?:markdown|md)?\s*\n?/i, '')
+    .replace(/\n?```\s*$/, '')
+  let html = marked.parse(md)
   if (includeImages.value && imageRefs.value.length > 0) {
     html = html.replace(/<!-- PAGE:([^:]+):(\d+) -->/g, (_, fid, pg) =>
       `<img src="${BASE_URL}/api/subjects/${props.subjectId}/documents/${fid}/slides/${pg}/image" class="cs-page-img" />`)
@@ -259,7 +292,7 @@ async function handleGenerate() {
   try {
     const resp = await fetch(`${BASE_URL}/api/subjects/${props.subjectId}/cheatsheet/generate`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ include_images: includeImages.value }),
+      body: JSON.stringify({ include_images: includeImages.value, file_ids: selectedFileIds.value }),
     })
     const reader = resp.body.getReader()
     const decoder = new TextDecoder()
@@ -319,6 +352,11 @@ function handleClose() { visible.value = false }
 .setting-item > label { display:block; font-size:13px; color:var(--text-secondary); margin-bottom:6px; }
 .setting-item :deep(.el-select) { width:100%; }
 .page-indicator { text-align:center; font-size:12px; color:var(--text-tertiary); margin-top:8px; }
+.doc-empty { font-size:12px; color:var(--text-tertiary); padding:8px 0; }
+.doc-check-list { display:flex; flex-direction:column; gap:4px; max-height:150px; overflow-y:auto; }
+.doc-check-item { margin-right:0 !important; }
+.doc-check-item :deep(.el-checkbox__label) { font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; }
+.doc-name { font-size:12px; }
 
 .preview-panel { flex:1; overflow:auto; background:#e8e8e8; display:flex; justify-content:center; padding:24px; position:relative; }
 .edit-area { width:100%; }
