@@ -71,6 +71,7 @@
           style="width:100%;border-radius:8px" @click="handleGenerate">
           {{ generating ? '生成中...' : `生成 Cheatsheet (${selectedFileIds.length})` }}
         </el-button>
+        <div v-if="progressMsg && generating" class="progress-msg">{{ progressMsg }}</div>
         <el-button style="width:100%;margin-top:8px;margin-left:0;border-radius:8px" @click="handleExportPDF">
           导出 PDF
         </el-button>
@@ -133,6 +134,7 @@ const editMode = ref(false)
 const generating = ref(false)
 const imageRefs = ref([])
 const customPrompt = ref('')
+const progressMsg = ref('')
 const measureRef = ref(null)
 const pageHtmls = ref([])
 const docList = ref([])
@@ -300,7 +302,7 @@ watch(visible, v => { if (v) recalcPages() })
 
 async function handleGenerate() {
   if (!props.subjectId) return
-  generating.value = true; imageRefs.value = []; editMode.value = false
+  generating.value = true; imageRefs.value = []; editMode.value = false; progressMsg.value = ''
   let llmContent = ''
   try {
     const resp = await fetch(`${BASE_URL}/api/subjects/${props.subjectId}/cheatsheet/generate`, {
@@ -326,7 +328,8 @@ async function handleGenerate() {
           if (d.content) {
             if (!hasReal) { markdownContent.value = ''; hasReal = true }
             llmContent += d.content; markdownContent.value = llmContent
-          } else if (d.image_refs) { imageRefs.value = d.image_refs }
+          } else if (d.image_refs) { imageRefs.value = d.image_refs
+          } else if (d.progress) { progressMsg.value = d.progress }
         } catch {}
       }
     }
@@ -369,6 +372,7 @@ function handleClose() { visible.value = false }
 .setting-item > label { display:block; font-size:13px; color:var(--text-secondary); margin-bottom:6px; }
 .setting-item :deep(.el-select) { width:100%; }
 .page-indicator { text-align:center; font-size:12px; color:var(--text-tertiary); margin-top:8px; }
+.progress-msg { font-size:11px; color:var(--color-accent); text-align:center; margin-top:6px; }
 .doc-empty { font-size:12px; color:var(--text-tertiary); padding:8px 0; }
 .doc-check-list { display:flex; flex-direction:column; gap:4px; max-height:150px; overflow-y:auto; }
 .doc-check-item { margin-right:0 !important; }
