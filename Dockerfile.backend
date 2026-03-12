@@ -1,0 +1,21 @@
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=on \
+    PIP_NO_CACHE_DIR=off \
+    TZ=Asia/Shanghai
+
+WORKDIR /app/backend
+
+COPY backend/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY backend ./
+COPY LightRAG /app/LightRAG
+
+ENV PYTHONPATH="/app/LightRAG:${PYTHONPATH}"
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+

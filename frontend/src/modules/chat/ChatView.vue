@@ -1122,16 +1122,20 @@ const handleSaveEdit = async (index) => {
   const editedContentNormalized = editedMessage.content.trim()
   
   // 模拟前端的过滤和合并逻辑，构建前端索引到原始索引的映射
-  // 步骤1：过滤掉 tool 消息，并记录每个过滤后消息对应的原始索引
+  // 步骤1：过滤掉 tool 消息和 doc-* 系统消息，并记录每个过滤后消息对应的原始索引
   const filteredWithIndex = []
   for (let i = 0; i < originalMessages.messages.length; i++) {
-    if (originalMessages.messages[i].role !== 'tool') {
-      filteredWithIndex.push({
-        msg: originalMessages.messages[i],
-        originalIndex: i,
-        role: originalMessages.messages[i].role === 'human' ? 'user' : originalMessages.messages[i].role
-      })
-    }
+    const msg = originalMessages.messages[i]
+    // 跳过工具调用消息
+    if (msg.role === 'tool') continue
+    // 跳过文档高亮/截图这类 doc-* 系统消息（它们不会出现在主对话 messages 列表中）
+    if (msg.role === 'system' && (msg.type === 'doc-highlight' || msg.type === 'doc-image')) continue
+
+    filteredWithIndex.push({
+      msg,
+      originalIndex: i,
+      role: msg.role === 'human' ? 'user' : msg.role
+    })
   }
   
   // 步骤2：模拟合并逻辑，构建前端索引映射
@@ -1171,16 +1175,15 @@ const handleSaveEdit = async (index) => {
     let filteredCount = 0
     for (let i = 0; i < originalMessages.messages.length; i++) {
       const msg = originalMessages.messages[i]
-      if (msg.role === 'tool') {
-        continue
-      }
+      // 与上面的过滤规则保持一致：跳过 tool 和 doc-* 系统消息
+      if (msg.role === 'tool') continue
+      if (msg.role === 'system' && (msg.type === 'doc-highlight' || msg.type === 'doc-image')) continue
+
       if (filteredCount === index && (msg.role === 'user' || msg.role === 'human')) {
         originalIndex = i
         break
       }
-      if (msg.role !== 'tool') {
-        filteredCount++
-      }
+      filteredCount++
     }
   }
   

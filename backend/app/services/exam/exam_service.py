@@ -9,19 +9,22 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
 from fastapi import UploadFile
+import aiohttp
 
 import app.config as config
 from app.config import get_logger
 from app.schemas.exam import ExamPaper, ExamListItem, ExamStatusResponse
 from app.services.exam.exam_parser import ExamParser
 from app.services.exam.exam_storage import ExamStorage
-from app.services.paddle_ocr_client import get_gitee_client, GiteePaddleOCRClient
+from app.services.config_service import config_service
 from app.utils.text_cleaner import TextCleaner
 
 logger = get_logger("app.exam_service")
@@ -33,16 +36,6 @@ class ExamService:
     def __init__(self):
         self.storage = ExamStorage()
         self.parser = ExamParser()
-        self.ocr_client: Optional[GiteePaddleOCRClient] = None
-        
-        # 尝试初始化 OCR 客户端
-        try:
-            self.ocr_client = get_gitee_client()
-            if not self.ocr_client.enabled:
-                logger.warning("Gitee OCR Token 未配置，OCR 功能不可用")
-                self.ocr_client = None
-        except Exception as e:
-            logger.warning(f"OCR 客户端初始化失败: {e}")
 
     @staticmethod
     def _infer_year(filename: str, text_snippet: str) -> Optional[str]:
@@ -272,20 +265,111 @@ class ExamService:
     
     async def _perform_ocr(self, exam_id: str, pdf_path: str) -> str:
         """执行 OCR 解析"""
-        if self.ocr_client and self.ocr_client.enabled:
-            # 使用 Gitee PaddleOCR
-            result = self.ocr_client.parse_pdf(
-                file_path=pdf_path,
-                conversation_id=exam_id,  # 复用 conversation_id 参数
-                document_id=exam_id,
-                output_dir=self.storage.get_exam_dir(exam_id)
-            )
-            return result.get("text", "")
-        else:
-            # 回退方案：使用本地 PDF 解析器
-            from app.utils.pdf_parser import PDFParser
-            parser = PDFParser()
-            return parser.extract_text(pdf_path)
+        ocr_cfg = config_service.get_config("ocr")
+        host = (ocr_cfg.get("host") or "https://api.siliconflow.cn/v1").rstrip("/")
+        model = (ocr_cfg.get("model") or "PaddlePaddle/PaddleOCR-VL-1.5").strip()
+        api_key = (ocr_cfg.get("api_key") or "").strip()
+
+        if api_key:
+            try:
+                return await self._ocr_pdf_with_siliconflow(
+                    pdf_path=pdf_path,
+                    host=host,
+                    api_key=api_key,
+                    model=model,
+                )
+            except Exception as e:
+                logger.warning(f"SiliconFlow OCR 失败，将回退本地解析: {e}")
+
+        # 回退方案：使用本地 PDF 解析器
+        from app.utils.pdf_parser import PDFParser
+        parser = PDFParser()
+        return parser.extract_text(pdf_path)
+
+    async def _ocr_pdf_with_siliconflow(self, pdf_path: str, host: str, api_key: str, model: str) -> str:
+        """使用 SiliconFlow 的 OCR 模型解析 PDF（逐页渲染为图片后识别）。"""
+        import fitz  # PyMuPDF
+
+        file_path_obj = Path(pdf_path).resolve()
+        if not file_path_obj.exists():
+            raise FileNotFoundError(f"文件不存在: {pdf_path}")
+
+        # 避免极端大 PDF 导致请求/成本不可控：这里做一个软限制
+        max_pages_soft_limit = 80
+        texts: List[str] = []
+
+        with fitz.open(str(file_path_obj)) as doc:
+            page_count = doc.page_count
+            if page_count > max_pages_soft_limit:
+                logger.warning(
+                    f"PDF 页数过多({page_count})，仅识别前 {max_pages_soft_limit} 页以避免请求过大"
+                )
+                page_count = max_pages_soft_limit
+
+            for i in range(page_count):
+                page = doc.load_page(i)
+                pix = page.get_pixmap(dpi=200)
+                img_bytes = pix.tobytes("png")
+                img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+
+                page_text = await self._ocr_image_with_siliconflow(
+                    image_base64=img_b64,
+                    host=host,
+                    api_key=api_key,
+                    model=model,
+                )
+                if page_text:
+                    texts.append(page_text.strip())
+
+        return "\n\n".join([t for t in texts if t])
+
+    async def _ocr_image_with_siliconflow(self, image_base64: str, host: str, api_key: str, model: str) -> str:
+        """调用 SiliconFlow OpenAI 兼容接口的 OCR（Vision）模型，返回识别出的纯文本。"""
+        url = f"{host}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        # 采用 OpenAI 兼容的多模态消息格式（image_url data URL）
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "你是 OCR 引擎。请只输出从图片中识别出的文字内容，不要添加任何解释或多余标点。",
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "请识别这张图片中的文字并原样输出。"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{image_base64}"},
+                        },
+                    ],
+                },
+            ],
+            "temperature": 0.0,
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=180),
+            ) as resp:
+                text = await resp.text()
+                if resp.status != 200:
+                    raise RuntimeError(f"OCR 请求失败: {resp.status}, {text[:500]}")
+                data = json.loads(text)
+                content = (
+                    (data.get("choices") or [{}])[0]
+                    .get("message", {})
+                    .get("content", "")
+                )
+                return content or ""
     
     def get_exam_status(self, exam_id: str) -> Optional[ExamStatusResponse]:
         """获取试卷处理状态"""

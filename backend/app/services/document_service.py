@@ -739,6 +739,23 @@ class DocumentService:
         documents.sort(key=lambda x: x.get("upload_time", ""), reverse=True)
         return documents
     
+    def _resolve_file_path(self, stored_path: str) -> str:
+        """若存储的是其他环境（如 Windows 本机）的绝对路径，在容器内不存在时按当前 upload_dir 解析"""
+        if not stored_path:
+            return stored_path
+        p = Path(stored_path)
+        if p.exists():
+            return stored_path
+        normalized = stored_path.replace("\\", "/")
+        if "uploads/" in normalized:
+            parts = normalized.split("uploads/", 1)
+            if len(parts) == 2:
+                relative = parts[1]
+                resolved = Path(config.settings.upload_dir) / relative
+                if resolved.exists():
+                    return str(resolved)
+        return stored_path
+
     def get_document_for_subject(self, subject_id: str, file_id: str) -> Optional[Dict]:
         """获取知识库文档信息
         
@@ -750,7 +767,13 @@ class DocumentService:
             文档信息，如果不存在返回 None
         """
         status = self._load_subject_status(subject_id)
-        return status.get("documents", {}).get(file_id)
+        doc = status.get("documents", {}).get(file_id)
+        if not doc:
+            return None
+        doc = dict(doc)
+        if doc.get("file_path"):
+            doc["file_path"] = self._resolve_file_path(doc["file_path"])
+        return doc
     
     async def get_document_status_for_subject(self, subject_id: str, file_id: str) -> Optional[Dict]:
         """获取知识库文档处理状态

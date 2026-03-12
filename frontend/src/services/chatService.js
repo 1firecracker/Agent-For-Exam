@@ -23,7 +23,8 @@ class ChatService {
       // 目前不需要额外参数，LLM会自动检测
     }
     
-    const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/conversations/${conversationId}/query/stream`, {
+    const base = import.meta.env.VITE_API_BASE_URL || ''
+    const response = await fetch(`${base}/api/conversations/${conversationId}/query/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

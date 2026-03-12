@@ -1,0 +1,41 @@
+version: "3.9"
+
+services:
+  backend-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: agent-for-exam-backend-dev
+    ports:
+      - "8000:8000"
+    volumes:
+      # 挂载整个 backend 代码目录，支持热更新
+      - ./backend:/app/backend
+      # 保持数据、日志、上传目录与生产一致
+      - ./backend/uploads:/app/backend/uploads
+      - ./backend/data:/app/backend/data
+      - ./backend/logs:/app/backend/logs
+    # 开发模式：启用 uvicorn 自动重载
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+
+  frontend-dev:
+    image: node:20-alpine
+    container_name: agent-for-exam-frontend-dev
+    working_dir: /app/frontend
+    environment:
+      # 告诉 Vite 在 Docker 开发模式下将 /api 代理到 backend-dev 容器
+      - VITE_DEV_API_PROXY_TARGET=http://backend-dev:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      # 挂载前端源码目录，Vite Dev Server 热更新
+      - ./frontend:/app/frontend
+    command: >
+      sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    depends_on:
+      - backend-dev
+

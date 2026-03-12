@@ -27,7 +27,9 @@ MODEL_LISTS = {
         "Qwen/Qwen2.5-7B-Instruct",
         "Qwen/Qwen3-Embedding-0.6B",
         "BAAI/bge-m3",
-        "Qwen/Qwen3-Embedding-4B"
+        "Qwen/Qwen3-Embedding-4B",
+        "PaddlePaddle/PaddleOCR-VL-1.5",
+        "deepseek-ai/DeepSeek-OCR"
     ]
 }
 
@@ -67,6 +69,7 @@ async def get_llm_config():
         "chat": all_configs["chat"],
         "mindmap": all_configs["mindmap"],
         "embedding": all_configs.get("embedding", {}),
+        "ocr": all_configs.get("ocr", {}),
         "model_lists": merged_model_lists
     }
 
@@ -82,10 +85,10 @@ async def update_llm_config(scene: str, config_data: LLMConfigUpdate):
     Returns:
         更新后的配置（不包含 API Key）
     """
-    if scene not in ["knowledge_graph", "chat", "mindmap", "embedding"]:
+    if scene not in ["knowledge_graph", "chat", "mindmap", "embedding", "ocr"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"无效的场景名称: {scene}，必须是 knowledge_graph, chat, mindmap 或 embedding"
+            detail=f"无效的场景名称: {scene}，必须是 knowledge_graph, chat, mindmap, embedding 或 ocr"
         )
     
     # 验证 binding

@@ -3,7 +3,7 @@
 agent for exam是一个基于 LightRAG 的智能考试助手系统，面向教育场景的知识图谱构建、页面级引用的智能问答、试题生成和自动批改的 Web 应用。支持 PPTX/PDF 文档上传、知识抽取、知识图谱可视化、智能对话、AI模拟试题生成和智能批改功能，并提供基于大模型的智能 Agent 模式，自动编排多种工具完成文档浏览、知识图谱问答和思维导图生成等任务。
 
 
-![Agent for Exam 系统架构图](./exam%20agent.png)
+![Agent for Exam 系统架构图](./image/exam%20agent.png)
 
 ## 解决了哪些痛点?
 
@@ -50,13 +50,12 @@ NLP_project/
 
 ## 环境要求
 
-### 后端
-- Python 3.10+
-- pip
+### 部署（Docker）
+- Docker / Docker Desktop
 
-### 前端
-- Node.js 16+
-- npm 或 yarn
+### 开发（本地）
+- 后端：Python 3.10+、pip
+- 前端：Node.js 16+、npm 或 yarn
 
 ## 安装步骤
 
@@ -67,7 +66,23 @@ git clone https://github.com/1firecracker/Agent-For-Exam.git
 cd NLP_project
 ```
 
-### 2. 后端环境配置
+### 2. 部署（Docker，推荐）
+
+一条命令启动前后端（需已安装 Docker Desktop）：
+
+```bash
+docker compose up -d
+```
+
+- 访问前端：http://localhost  
+- API 文档：http://localhost:8000/docs  
+
+**其余配置在应用内完成**：打开页面后点击右上角 **设置**（⚙️），在设置页中配置 LLM API Key、模型等；带默认项的会自动使用默认值。  
+可选：若需 Gitee OCR 等后端环境变量，可在 `backend/` 下创建 `.env` 并配置，再在 `docker-compose.yml` 的 backend 服务中增加 `env_file: - ./backend/.env` 后执行 `docker compose up -d` 重启。
+
+### 3. 开发（本地启动）
+
+#### 3.1 后端环境配置
 
 ```bash
 # 进入后端目录
@@ -86,7 +101,7 @@ venv\Scripts\activate.bat
 pip install -r requirements.txt
 ```
 
-### 3. 前端环境配置
+#### 3.2 前端环境配置
 
 ```bash
 # 进入前端目录
@@ -96,32 +111,9 @@ cd frontend
 npm install
 ```
 
-### 4. 配置环境变量（必需）
+#### 3.3 配置环境变量（必需）
 
-**重要**：以下配置项是必需的，请配置环境变量。
-
-在 `backend/` 目录下创建 `.env` 文件：
-
-```bash
-# Windows CMD
-cd backend
-copy .env.example .env
-
-# Windows PowerShell
-cd backend
-Copy-Item .env.example .env
-```
-
-然后编辑 `.env` 文件，填入 Gitee OCR Token：
-
-```env
-# ==================== Gitee OCR 配置（必需）====================
-# 默认启用 Gitee OCR 进行 PDF 解析，需要配置 Token
-ENABLE_GITEE_OCR=true
-GITEE_OCR_TOKEN=your-gitee-ocr-token-here  # 必需：Gitee OCR Token
-# 获取方式：https://ai.gitee.com/serverless-api?model=PaddleOCR-VL
-每日免费100页解析
-```
+同部署方式：在 `backend/.env` 中配置 `GITEE_OCR_TOKEN`。
 
 **必需配置项**：
 - **`GITEE_OCR_TOKEN`** - Gitee OCR Token（用于 PDF 解析，默认启用 Gitee OCR）
@@ -138,6 +130,32 @@ GITEE_OCR_TOKEN=your-gitee-ocr-token-here  # 必需：Gitee OCR Token
 - `.env` 文件不会被提交到 Git（已在 `.gitignore` 中）
 - 如果未配置 `GITEE_OCR_TOKEN`，PDF 解析会失败并回退到本地解析（PyMuPDF/pdfplumber）
 
+### 4. 使用 Docker 进行本地开发调试（可选）
+
+如果希望在 Docker 中进行日常开发调试（而不是本机直接运行 Python / Node），可以使用 `docker-compose.dev.yml`：
+
+- 启动开发环境（后端 + 前端）：
+
+```bash
+docker compose -f docker-compose.dev.yml up --build
+```
+
+- 前端开发入口：http://localhost:5173  
+- 后端 API：http://localhost:8000  
+
+说明：
+
+- 后端：`./backend` 目录挂载到容器中，使用 `uvicorn --reload`，修改 Python 代码后会自动重载。
+- 前端：`./frontend` 目录挂载到容器中，由 Vite Dev Server 提供服务，修改前端代码会自动热更新。
+
+停止开发环境：
+
+```bash
+docker compose -f docker-compose.dev.yml down
+```
+
+> 生产/正式部署仍使用前文的 `docker compose up -d`，`docker-compose.dev.yml` 仅用于本地开发调试。
+
 ### 5. LLM 配置（通过前端界面）
 
 **重要**：LLM API Key 和模型配置通过前端界面进行管理，无需在 `.env` 文件中配置。
@@ -148,7 +166,7 @@ GITEE_OCR_TOKEN=your-gitee-ocr-token-here  # 必需：Gitee OCR Token
 2. **聊天对话**：用于智能问答和 Agent 模式
 3. **思维导图生成**：用于生成思维导图
 
-每个场景可以独立配置：暂时只支持硅基流动提供的模型，每人有免费的使用额度(https://siliconflow.cn/)(ps:项目token消耗太大，各位填个邀请码(aSxiQo98)或进入邀请链接(https://cloud.siliconflow.cn/i/aSxiQo98)实名认证后可以让作者回血，十分感谢🙏)
+每个场景可以独立配置：暂时只支持硅基流动提供的模型，每人有免费的使用额度(https://siliconflow.cn/)(ps:项目调试过程token消耗太大，各位填个邀请码(aSxiQo98)或进入邀请链接(https://cloud.siliconflow.cn/i/aSxiQo98)实名认证后可以让作者回血，十分感谢🙏)
 - **模型**：选择对应的模型（如 DeepSeek-V3.2-Exp、Qwen2.5-VL-7B-Instruct 等）
 - **API Key**：输入对应的 API Key（加密存储，不会明文保存）
 
@@ -160,7 +178,13 @@ GITEE_OCR_TOKEN=your-gitee-ocr-token-here  # 必需：Gitee OCR Token
 
 ## 启动应用
 
-### 一键启动
+### 部署（Docker）
+
+```bash
+docker compose up -d
+```
+
+### 开发（本地）
 
 **PowerShell:**
 ```powershell
@@ -173,7 +197,8 @@ GITEE_OCR_TOKEN=your-gitee-ocr-token-here  # 必需：Gitee OCR Token
 
 ## 访问地址
 
-- **前端应用**: http://localhost:5173
+- **部署（Docker）前端页面**: http://localhost
+- **开发（本地）前端应用**: http://localhost:5173
 - **后端 API**: http://localhost:8000
 - **API 文档**: http://localhost:8000/docs
 
@@ -223,11 +248,17 @@ GITEE_OCR_TOKEN=your-gitee-ocr-token-here  # 必需：Gitee OCR Token
   - 引用来源展示
   - 多对话独立工作空间
 
-### 3. 试题生成
+### 3. 试题分析
+
+- **多智能体流水线**：编排多个 Agent 对历年试卷进行“题目 → 知识点 → 讲义文档/页码”映射与校验
+- **报告生成与展示**：统计考频/分布并生成分析报告，支持导出 PDF
+
+![试题分析报告示例](./image/exam%20analysis.png)
+
+### 4. 试题生成
 
 
-
-### 4. 智能批改
+### 5. 智能批改
 
 - **学生答卷处理**
   - 支持 PDF/DOCX/TXT 格式答卷上传

@@ -23,6 +23,11 @@ export const useSettingsStore = defineStore('settings', () => {
       binding: 'siliconflow',
       model: '',
       host: ''
+    },
+    ocr: {
+      binding: 'siliconflow',
+      model: '',
+      host: ''
     }
   })
   
@@ -40,7 +45,8 @@ export const useSettingsStore = defineStore('settings', () => {
         knowledge_graph: data.knowledge_graph,
         chat: data.chat,
         mindmap: data.mindmap,
-        embedding: data.embedding || { binding: 'siliconflow', model: '', host: '' }
+        embedding: data.embedding || { binding: 'siliconflow', model: '', host: '' },
+        ocr: data.ocr || { binding: 'siliconflow', model: '', host: '' }
       }
       modelLists.value = data.model_lists || {}
     } catch (error) {

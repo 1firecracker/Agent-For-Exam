@@ -123,6 +123,12 @@ class ConfigService:
                     "host": config.settings.embedding_binding_host or config.settings.llm_binding_host or default_host,
                     "api_key_encrypted": embedding_api_key_encrypted
                 },
+                "ocr": {
+                    "binding": "siliconflow",
+                    "model": "PaddlePaddle/PaddleOCR-VL-1.5",
+                    "host": default_host,
+                    "api_key_encrypted": _encrypt_api_key(config.settings.llm_binding_api_key) if config.settings.llm_binding_api_key else ""
+                },
                 "custom_models": {
                     "siliconflow": []  # 用户自定义的模型列表
                 }
@@ -305,7 +311,7 @@ class ConfigService:
         config_data = self._load_config()
         result = {}
         
-        for scene in ["knowledge_graph", "chat", "mindmap", "embedding"]:
+        for scene in ["knowledge_graph", "chat", "mindmap", "embedding", "ocr"]:
             scene_config = config_data.get(scene, {})
             result[scene] = {
                 "binding": scene_config.get("binding", "siliconflow"),

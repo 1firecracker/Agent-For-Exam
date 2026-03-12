@@ -38,6 +38,15 @@
           @update="handleUpdate('embedding', $event)"
         />
       </el-tab-pane>
+
+      <el-tab-pane label="OCR" name="ocr">
+        <ConfigForm
+          :config="configs.ocr"
+          :model-lists="modelLists"
+          default-binding="siliconflow"
+          @update="handleUpdate('ocr', $event)"
+        />
+      </el-tab-pane>
     </el-tabs>
     
     <template #footer>
