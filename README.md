@@ -151,7 +151,8 @@ docker compose -f docker-compose.dev.yml down
 2. **聊天对话**：用于智能问答和 Agent 模式
 3. **思维导图生成**：用于生成思维导图
 
-每个场景可以独立配置：暂时只支持硅基流动提供的模型，每人有免费的使用额度(https://siliconflow.cn/)(ps:项目调试过程token消耗太大，各位填个邀请码(aSxiQo98)或进入邀请链接(https://cloud.siliconflow.cn/i/aSxiQo98)实名认证后可以让作者回血，十分感谢🙏)
+每个场景可以独立配置：暂时只支持硅基流动提供的模型，每人有免费的使用额度(https://siliconflow.cn/)
+(ps:项目调试过程token消耗太大，各位填个邀请码(aSxiQo98)或进入邀请链接(https://cloud.siliconflow.cn/i/aSxiQo98)实名认证后可以让作者回血，十分感谢🙏)
 - **模型**：选择对应的模型（如 DeepSeek-V3.2-Exp、Qwen2.5-VL-7B-Instruct 等）
 - **API Key**：输入对应的 API Key（加密存储，不会明文保存）
 
