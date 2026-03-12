@@ -230,12 +230,11 @@ const jumpToPage = (pageNumber) => {
 const loadDocumentAndJump = async (fileId, pageNumber) => {
   if (!fileId || (!currentSubjectId.value && !conversationStore.currentConversationId)) return
 
-  // 如果是不同文档，先切换文档并加载对应的 slides
   if (fileId !== selectedFileId.value) {
+    slides.value = []
     selectedFileId.value = fileId
     await loadSlides()
   } else if (!slides.value.length) {
-    // 同一个文档但还没有加载过页列表，也需要先加载
     await loadSlides()
   }
 

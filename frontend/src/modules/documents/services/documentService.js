@@ -65,13 +65,11 @@ class DocumentService {
   }
 
   getSlideImageUrl(conversationId, fileId, slideId, useCache = true) {
-    const timestamp = new Date().getTime()
-    return `/api/conversations/${conversationId}/documents/${fileId}/slides/${slideId}/image?use_cache=${useCache}&_t=${timestamp}`
+    return `/api/conversations/${conversationId}/documents/${fileId}/slides/${slideId}/image?use_cache=${useCache}`
   }
 
   getSlideThumbnailUrl(conversationId, fileId, slideId, useCache = true) {
-    const timestamp = new Date().getTime()
-    return `/api/conversations/${conversationId}/documents/${fileId}/slides/${slideId}/thumbnail?use_cache=${useCache}&_t=${timestamp}`
+    return `/api/conversations/${conversationId}/documents/${fileId}/slides/${slideId}/thumbnail?use_cache=${useCache}`
   }
 
   // ========== 按 subjectId 操作文档的方法 ==========
@@ -140,13 +138,11 @@ class DocumentService {
   }
 
   getSlideImageUrlForSubject(subjectId, fileId, slideId, useCache = true) {
-    const timestamp = new Date().getTime()
-    return `/api/subjects/${subjectId}/documents/${fileId}/slides/${slideId}/image?use_cache=${useCache}&_t=${timestamp}`
+    return `/api/subjects/${subjectId}/documents/${fileId}/slides/${slideId}/image?use_cache=${useCache}`
   }
 
   getSlideThumbnailUrlForSubject(subjectId, fileId, slideId, useCache = true) {
-    const timestamp = new Date().getTime()
-    return `/api/subjects/${subjectId}/documents/${fileId}/slides/${slideId}/thumbnail?use_cache=${useCache}&_t=${timestamp}`
+    return `/api/subjects/${subjectId}/documents/${fileId}/slides/${slideId}/thumbnail?use_cache=${useCache}`
   }
 }
 

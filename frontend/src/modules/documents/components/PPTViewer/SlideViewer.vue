@@ -4,19 +4,32 @@
       <div
         v-for="(slide, index) in slides"
         :key="slide.slide_number || index"
-        :ref="el => { if (el) slideRefs[index] = el }"
+        :ref="el => setSlideRef(el, index, slide.slide_number)"
+        :data-slide-number="slide.slide_number"
         class="slide-item"
         :class="{ 'current-slide': slide.slide_number === currentSlideNumber }"
         @click="onSlideClick(slide.slide_number)"
         @dblclick="handleSlideDblClick($event, slide, index)"
       >
-        <img
-          :src="getSlideImageUrl(slide.slide_number)"
-          :alt="`Slide ${slide.slide_number}`"
-          class="slide-image"
-          @load="handleImageLoad"
-          @error="handleImageError"
-        />
+        <div class="slide-content">
+          <div
+            v-if="!loadedSlides.has(slide.slide_number)"
+            class="slide-skeleton"
+            :style="{ aspectRatio: fileExtension === 'pdf' ? '1/1.414' : '16/9' }"
+          >
+            <div class="skeleton-shimmer"></div>
+            <span class="skeleton-page">{{ slide.slide_number }}</span>
+          </div>
+          <img
+            v-if="visibleSlides.has(slide.slide_number)"
+            :src="getSlideImageUrl(slide.slide_number)"
+            :alt="`Slide ${slide.slide_number}`"
+            class="slide-image"
+            :class="loadedSlides.has(slide.slide_number) ? '' : 'slide-image-loading'"
+            @load="onImageLoad(slide.slide_number)"
+            @error="handleImageError"
+          />
+        </div>
       </div>
     </div>
     <div v-else class="empty-slide">
@@ -43,7 +56,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick, onUnmounted } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Document, Picture } from '@element-plus/icons-vue'
 import documentService from '../../services/documentService'
 
@@ -86,6 +99,9 @@ const emit = defineEmits(['slide-change', 'request-load-parsed', 'request-load-i
 
 const slideViewerRef = ref(null)
 const slideRefs = ref([])
+const visibleSlides = ref(new Set())
+const loadedSlides = ref(new Set())
+let observer = null
 
 // 气泡菜单状态
 const bubbleState = ref({
@@ -123,8 +139,16 @@ const getSlideImageUrl = (slideNumber) => {
   return ''
 }
 
-const handleImageLoad = () => {
-  // 图片加载完成后的处理
+const setSlideRef = (el, index, slideNumber) => {
+  if (!el) return
+  slideRefs.value[index] = el
+  if (observer && !visibleSlides.value.has(slideNumber)) {
+    observer.observe(el)
+  }
+}
+
+const onImageLoad = (slideNumber) => {
+  loadedSlides.value.add(slideNumber)
 }
 
 const handleImageError = (event) => {
@@ -266,20 +290,45 @@ watch(() => bubbleState.value.visible, (visible) => {
   }
 })
 
-// 组件卸载时清理事件监听器
+watch(() => props.fileId, () => {
+  visibleSlides.value.clear()
+  loadedSlides.value.clear()
+})
+
+onMounted(() => {
+  observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        const num = Number(entry.target.dataset.slideNumber)
+        if (num) {
+          visibleSlides.value.add(num)
+          observer.unobserve(entry.target)
+        }
+      }
+    }
+  }, { root: slideViewerRef.value, rootMargin: '400px 0px' })
+  slideRefs.value.forEach(el => {
+    if (el && el.dataset.slideNumber) observer.observe(el)
+  })
+})
+
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown)
   if (slideViewerRef.value) {
     slideViewerRef.value.removeEventListener('scroll', handleScroll)
   }
-  // 清理超时
   if (doubleClickTimeout.value) {
     clearTimeout(doubleClickTimeout.value)
+  }
+  if (observer) {
+    observer.disconnect()
+    observer = null
   }
 })
 
 // 当 currentSlideNumber 改变时，滚动到对应的幻灯片
 watch(() => props.currentSlideNumber, (newNumber) => {
+  visibleSlides.value.add(newNumber)
   nextTick(() => {
     const slideIndex = props.slides.findIndex(s => s.slide_number === newNumber)
     if (slideIndex !== -1 && slideRefs.value[slideIndex] && slideViewerRef.value) {
@@ -324,6 +373,46 @@ watch(() => props.currentSlideNumber, (newNumber) => {
   border-radius: 4px;
 }
 
+.slide-content {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.slide-skeleton {
+  width: 100%;
+  max-width: 960px;
+  background: #e8e8e8;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+
+.skeleton-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.4) 50%, transparent 100%);
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.skeleton-page {
+  color: #c0c4cc;
+  font-size: 28px;
+  font-weight: 600;
+  z-index: 1;
+  user-select: none;
+}
+
 .slide-image {
   max-width: 100%;
   width: auto;
@@ -331,6 +420,15 @@ watch(() => props.currentSlideNumber, (newNumber) => {
   object-fit: contain;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   border-radius: 4px;
+  transition: opacity 0.3s ease;
+}
+
+.slide-image-loading {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  overflow: hidden;
 }
 
 .empty-slide {

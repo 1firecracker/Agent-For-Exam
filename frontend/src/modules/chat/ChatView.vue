@@ -265,16 +265,20 @@
           <!-- 文档 Tab（默认显示） -->
           <el-tab-pane label="Documents" name="documents">
             <div class="docs-panel">
-              <!-- PPT 查看器 -->
+              <div v-if="docStore.loading" class="docs-loading">
+                <el-icon class="is-loading" :size="24"><Loading /></el-icon>
+                <span>加载文档列表…</span>
+              </div>
               <PPTViewer 
                 v-if="conversationId" 
+                v-show="!docStore.loading"
                 ref="pptViewerRef"
                 :default-file-id="selectedDocumentId"
                 @request-load-parsed="handleRequestLoadParsed"
                 @request-load-image="handleRequestLoadImage"
               />
               <el-empty
-                v-else
+                v-if="!conversationId && !docStore.loading"
                 description="请先选择或创建一个对话"
                 :image-size="120"
               />
@@ -310,7 +314,7 @@
 <script setup>
 import { ref, nextTick, onMounted, watch, computed, provide } from 'vue'
 import { useRoute } from 'vue-router'
-import { Position, ArrowRight, ArrowLeft, Share, Edit, Close, Check } from '@element-plus/icons-vue'
+import { Position, ArrowRight, ArrowLeft, Share, Edit, Close, Check, Loading } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import katex from 'katex'
 import { useConversationStore } from './store/conversationStore'
@@ -1225,62 +1229,32 @@ const initializeConversation = async () => {
     convStore.selectConversation(currentConvId)
   }
   
-  // 加载文档（使用 subjectId 优先）
-  console.log('📂 Loading documents...')
-  try {
-    if (subjectId.value) {
-      // 优先使用 subjectId 加载文档
-      await docStore.loadDocumentsForSubject(subjectId.value)
-      const docs = docStore.getDocumentsBySubject(subjectId.value)
-      console.log('✅ Documents loaded (by subject):', docs)
-    
-    // 自动选择按字符排序的第一个文档
-    if (docs && docs.length > 0) {
-      const supportedDocs = docs.filter(doc => 
-        doc.file_extension === 'pptx' || doc.file_extension === 'pdf'
-      )
-      
-      if (supportedDocs.length > 0) {
-        // 按文件名字符排序，选择第一个
-        const sortedDocs = [...supportedDocs].sort((a, b) => {
-          const nameA = (a.filename || '').toLowerCase()
-          const nameB = (b.filename || '').toLowerCase()
-          return nameA.localeCompare(nameB)
-        })
-        selectedDocumentId.value = sortedDocs[0]?.file_id || null
-        console.log('📄 自动选择文档（按字符排序）:', selectedDocumentId.value, sortedDocs[0]?.filename)
+  // 文档加载与消息加载并行，互不阻塞
+  const docPromise = (async () => {
+    try {
+      let docs
+      if (subjectId.value) {
+        await docStore.loadDocumentsForSubject(subjectId.value)
+        docs = docStore.getDocumentsBySubject(subjectId.value)
+      } else {
+        await docStore.loadDocuments(currentConvId)
+        docs = docStore.getDocumentsByConversation(currentConvId)
       }
-      }
-    } else {
-      // 回退到旧的 conversationId 方式
-      await docStore.loadDocuments(currentConvId)
-      const docs = docStore.getDocumentsByConversation(currentConvId)
-      console.log('✅ Documents loaded (by conversation):', docs)
-      
       if (docs && docs.length > 0) {
-        const supportedDocs = docs.filter(doc => 
-          doc.file_extension === 'pptx' || doc.file_extension === 'pdf'
-        )
-        
-        if (supportedDocs.length > 0) {
-          // 按文件名字符排序，选择第一个
-          const sortedDocs = [...supportedDocs].sort((a, b) => {
-            const nameA = (a.filename || '').toLowerCase()
-            const nameB = (b.filename || '').toLowerCase()
-            return nameA.localeCompare(nameB)
-          })
-          selectedDocumentId.value = sortedDocs[0]?.file_id || null
-          console.log('📄 自动选择文档（按字符排序）:', selectedDocumentId.value, sortedDocs[0]?.filename)
+        const supported = docs.filter(d => d.file_extension === 'pptx' || d.file_extension === 'pdf')
+        if (supported.length > 0) {
+          const sorted = [...supported].sort((a, b) => (a.filename || '').toLowerCase().localeCompare((b.filename || '').toLowerCase()))
+          selectedDocumentId.value = sorted[0]?.file_id || null
         }
       }
+    } catch (e) {
+      console.error('❌ Failed to load documents:', e)
     }
-  } catch (e) {
-    console.error('❌ Failed to load documents:', e)
-  }
+  })()
 
-  // 加载历史消息
-  console.log('💬 Loading messages...')
-  await loadMessages()
+  const msgPromise = loadMessages()
+
+  await Promise.all([docPromise, msgPromise])
 }
 
 onMounted(async () => {
@@ -2200,6 +2174,17 @@ const formatEnhancedMarkdown = (text) => {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+.docs-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 12px;
+  color: #909399;
+  font-size: 14px;
 }
 
 /* Markdown 和 LaTeX 渲染样式 */
