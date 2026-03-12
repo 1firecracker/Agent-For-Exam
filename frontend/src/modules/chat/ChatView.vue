@@ -1484,14 +1484,20 @@ const extractReferenceMap = (text) => {
   
   const refContent = refSectionMatch[1]
   
-  // 匹配 [1] ... [[file_id|page]]，中间允许出现 [文档] / [知识图谱] 等任意内容
-  const refItemPattern = /\[(\d+)\][\s\S]*?\[\[([^|\]]+)\|(\d+)\]\]/g
+  // 匹配 [1] ... [[file_id|page]] 或 [[file_id|start-end]]，中间允许出现 [文档] / [知识图谱] 等任意内容
+  const refItemPattern = /\[(\d+)\][\s\S]*?\[\[([^|\]]+)\|(\d+)(?:-(\d+))?\]\]/g
   let match
   while ((match = refItemPattern.exec(refContent)) !== null) {
     const refNum = parseInt(match[1])
     const fileId = match[2]
-    const page = parseInt(match[3])
-    refMap.set(refNum, { fileId, page })
+    const startPage = parseInt(match[3])
+    const endPage = match[4] ? parseInt(match[4]) : startPage
+    refMap.set(refNum, {
+      fileId,
+      page: startPage,
+      startPage,
+      endPage
+    })
   }
   
   return refMap
@@ -1502,10 +1508,17 @@ const extractInlineRefList = (text) => {
   const refs = []
   if (!text) return refs
 
-  const pattern = /\[\[([^|\]]+)\|([0-9]+)\]\]/g
+  const pattern = /\[\[([^|\]]+)\|(\d+)(?:-(\d+))?\]\]/g
   let match
   while ((match = pattern.exec(text)) !== null) {
-    refs.push({ fileId: match[1], page: parseInt(match[2]) })
+    const startPage = parseInt(match[2])
+    const endPage = match[3] ? parseInt(match[3]) : startPage
+    refs.push({
+      fileId: match[1],
+      page: startPage,
+      startPage,
+      endPage
+    })
   }
   return refs
 }
@@ -1519,8 +1532,8 @@ const parseReferences = (html, originalText = '') => {
   
   // 情况 A：存在 References 段 -> 以 References 的编号映射为准
   if (refMap.size > 0) {
-    // 先移除原始的 [[file_id|page]] 标记（作为隐藏元数据，不直接展示给用户）
-    let result = html.replace(/\[\[([^|\]]+)\|([0-9]+)\]\]/g, '')
+    // 先移除原始的 [[file_id|page]] / [[file_id|start-end]] 标记（作为隐藏元数据，不直接展示给用户）
+    let result = html.replace(/\[\[([^|\]]+)\|(\d+)(?:-(\d+))?\]\]/g, '')
 
     // 再处理 [1]、[2] 等编号格式（如果 References 中有对应的文档信息）
     result = result.replace(/\[(\d+)\]/g, (match, refNum) => {
@@ -1535,12 +1548,12 @@ const parseReferences = (html, originalText = '') => {
     return result
   }
 
-  // 情况 B：没有 References 段 -> 将正文里的 [[file_id|page]] 直接替换成可点击 [1][2]...
+  // 情况 B：没有 References 段 -> 将正文里的 [[file_id|page]] / [[file_id|start-end]] 直接替换成可点击 [1][2]...
   const inlineRefs = extractInlineRefList(originalText)
   if (!inlineRefs.length) return html
 
   let idx = 0
-  return html.replace(/\[\[([^|\]]+)\|([0-9]+)\]\]/g, () => {
+  return html.replace(/\[\[([^|\]]+)\|(\d+)(?:-(\d+))?\]\]/g, () => {
     const ref = inlineRefs[idx]
     idx += 1
     if (!ref) return ''

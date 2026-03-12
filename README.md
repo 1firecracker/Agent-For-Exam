@@ -78,7 +78,6 @@ docker compose up -d
 - API 文档：http://localhost:8000/docs  
 
 **其余配置在应用内完成**：打开页面后点击右上角 **设置**（⚙️），在设置页中配置 LLM API Key、模型等；带默认项的会自动使用默认值。  
-可选：若需 Gitee OCR 等后端环境变量，可在 `backend/` 下创建 `.env` 并配置，再在 `docker-compose.yml` 的 backend 服务中增加 `env_file: - ./backend/.env` 后执行 `docker compose up -d` 重启。
 
 ### 3. 开发（本地启动）
 
@@ -111,24 +110,10 @@ cd frontend
 npm install
 ```
 
-#### 3.3 配置环境变量（必需）
+#### 3.3 环境变量（可选）
 
-同部署方式：在 `backend/.env` 中配置 `GITEE_OCR_TOKEN`。
-
-**必需配置项**：
-- **`GITEE_OCR_TOKEN`** - Gitee OCR Token（用于 PDF 解析，默认启用 Gitee OCR）
-
-**获取 Gitee OCR Token**（免费额度：每日100页）：
-1. 访问 [Gitee AI 模型广场](https://ai.gitee.com/serverless-api?model=PaddleOCR-VL)
-2. 找到 **PaddleOCR-VL** 模型
-3. 点击 **"在线体验"**
-4. 点击 **"API"** 标签
-5. 勾选 **"添加令牌为内嵌代码"**
-6. 复制生成的 api_key 到 `.env` 文件中的 `GITEE_OCR_TOKEN`
-
-**注意**：
-- `.env` 文件不会被提交到 Git（已在 `.gitignore` 中）
-- 如果未配置 `GITEE_OCR_TOKEN`，PDF 解析会失败并回退到本地解析（PyMuPDF/pdfplumber）
+当前默认不依赖额外的后端环境变量即可完成基础功能，常用配置（LLM API Key、模型等）都通过前端「设置」页面管理。  
+如需为后端增加其他自定义配置，可在 `backend/.env` 中按需添加对应键值，应用会通过 `pydantic-settings` 自动加载。
 
 ### 4. 使用 Docker 进行本地开发调试（可选）
 
