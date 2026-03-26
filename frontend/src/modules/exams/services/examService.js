@@ -61,6 +61,15 @@ const examService = {
     },
 
     /**
+     * 获取题目抽取前的 raw.md 原始文本
+     * @param {string} examId 
+     */
+    async getExamRaw(examId) {
+        const response = await axios.get(`${API_BASE}/${examId}/raw`)
+        return response.data
+    },
+
+    /**
      * 删除试卷
      * @param {string} examId 
      */

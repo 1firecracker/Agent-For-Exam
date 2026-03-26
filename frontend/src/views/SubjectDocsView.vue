@@ -85,7 +85,20 @@
             </div>
 
             <div class="doc-actions">
-              <el-button link type="primary" @click="testGetDocumentStatus(doc.file_id)">Details</el-button>
+              <el-button
+                link
+                type="primary"
+                @click="testGetDocumentStatus(doc.file_id)"
+              >
+                Details
+              </el-button>
+              <el-button
+                link
+                type="danger"
+                @click="handleDeleteCourseware(doc)"
+              >
+                Delete
+              </el-button>
             </div>
           </div>
         </div>
@@ -280,37 +293,44 @@
         
         <el-divider />
         
-        <h4>Questions Structure</h4>
-        <el-tree
-          :data="examQuestionsTree"
-          :props="{ label: 'label', children: 'children' }"
-          default-expand-all
-          class="questions-tree"
-          :expand-on-click-node="false"
-        >
-          <template #default="{ node, data }">
-            <div class="custom-tree-node">
-              <div class="node-header">
-                <strong>{{ node.label }}</strong>
-                <span v-if="data.data.score" class="node-score">
-                  <el-tag size="small" effect="plain">{{ data.data.score }}</el-tag>
-                </span>
-              </div>
-              
-              <!-- 题目内容 -->
-              <div class="node-content" v-if="data.data.content">
-                <div v-html="formatContent(data.data.content, data.data.exam_id)"></div>
-              </div>
-              
-              <!-- 选项 -->
-              <div v-if="data.data.options && data.data.options.length" class="node-options">
-                <div v-for="(opt, idx) in data.data.options" :key="idx" class="option-item">
-                  {{ opt }}
+        <el-tabs v-model="examDetailTab" @tab-change="onExamDetailTabChange">
+          <el-tab-pane label="题目结构" name="questions">
+            <h4>Questions Structure</h4>
+            <el-tree
+              :data="examQuestionsTree"
+              :props="{ label: 'label', children: 'children' }"
+              default-expand-all
+              class="questions-tree"
+              :expand-on-click-node="false"
+            >
+              <template #default="{ node, data }">
+                <div class="custom-tree-node">
+                  <div class="node-header">
+                    <strong>{{ node.label }}</strong>
+                    <span v-if="data.data.score" class="node-score">
+                      <el-tag size="small" effect="plain">{{ data.data.score }}</el-tag>
+                    </span>
+                  </div>
+                  
+                  <div class="node-content" v-if="data.data.content">
+                    <div v-html="formatContent(data.data.content, data.data.exam_id)"></div>
+                  </div>
+                  
+                  <div v-if="data.data.options && data.data.options.length" class="node-options">
+                    <div v-for="(opt, idx) in data.data.options" :key="idx" class="option-item">
+                      {{ opt }}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-          </template>
-        </el-tree>
+              </template>
+            </el-tree>
+          </el-tab-pane>
+          <el-tab-pane label="原始文本 (raw.md)" name="raw">
+            <p class="raw-tab-desc">题目抽取前的 OCR 原始文本，未经结构化解析。</p>
+            <div v-if="examRawLoading" class="loading-state"><el-skeleton :rows="6" animated /></div>
+            <pre v-else class="raw-md-content">{{ examRawContent || '(无内容或尚未生成)' }}</pre>
+          </el-tab-pane>
+        </el-tabs>
       </div>
       <div v-else class="loading-state">
         <el-skeleton :rows="5" animated />
@@ -346,6 +366,10 @@ const subjectId = computed(() => route.params.id ?? null)
 const examDetailDrawerVisible = ref(false)
 const selectedExamDetail = ref(null)
 const yearEditValue = ref('') // 详情抽屉内编辑年份
+const examDetailTab = ref('questions') // 'questions' | 'raw'
+const examRawContent = ref('')
+const examRawLoading = ref(false)
+const rawLoadedExamId = ref(null)
 
 // 列表卡片内编辑年份
 const editingYearId = ref(null)
@@ -525,6 +549,31 @@ const testGetDocumentStatus = async (fileId) => {
   }
 }
 
+const handleDeleteCourseware = async (doc) => {
+  const id = subjectId.value
+  if (!id) return
+
+  try {
+    await ElMessageBox.confirm(
+      `This will permanently delete "${doc.filename}". Continue?`,
+      'Warning',
+      {
+        confirmButtonText: 'Delete',
+        cancelButtonText: 'Cancel',
+        type: 'warning'
+      }
+    )
+
+    await docStore.deleteDocumentForSubject(id, doc.file_id)
+    ElMessage.success('Document deleted')
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('Delete courseware failed:', error)
+      ElMessage.error('Delete failed')
+    }
+  }
+}
+
 // ========== Exam 上传 ==========
 const handleBeforeExamUpload = (file) => {
   if (file.type !== 'application/pdf') {
@@ -560,7 +609,10 @@ const handleExamUpload = async (options) => {
 const viewExamDetail = async (examId) => {
   examDetailDrawerVisible.value = true
   selectedExamDetail.value = null
-  
+  examDetailTab.value = 'questions'
+  examRawContent.value = ''
+  rawLoadedExamId.value = null
+
   try {
     const detail = await examStore.getExamDetail(examId)
     selectedExamDetail.value = detail
@@ -568,6 +620,24 @@ const viewExamDetail = async (examId) => {
   } catch (error) {
     console.error('Failed to load exam detail:', error)
     ElMessage.error('Failed to load exam details')
+  }
+}
+
+async function onExamDetailTabChange(tabName) {
+  if (tabName !== 'raw' || !selectedExamDetail.value?.id) return
+  if (rawLoadedExamId.value === selectedExamDetail.value.id) return
+  examRawLoading.value = true
+  examRawContent.value = ''
+  try {
+    const res = await examStore.getExamRaw(selectedExamDetail.value.id)
+    examRawContent.value = res?.content ?? ''
+    rawLoadedExamId.value = selectedExamDetail.value.id
+  } catch (e) {
+    console.error('Failed to load raw.md:', e)
+    ElMessage.error(e?.response?.data?.detail || '获取原始文本失败')
+    examRawContent.value = ''
+  } finally {
+    examRawLoading.value = false
   }
 }
 
@@ -1018,6 +1088,25 @@ const formatContent = (content, examId) => {
 .exam-meta p {
   margin-bottom: 8px;
   font-size: 14px;
+}
+
+.raw-tab-desc {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 12px;
+}
+
+.raw-md-content {
+  margin: 0;
+  padding: 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 60vh;
+  overflow: auto;
 }
 
 .questions-tree {

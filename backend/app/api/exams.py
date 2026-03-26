@@ -101,6 +101,16 @@ async def get_exam(exam_id: str):
     return exam
 
 
+@router.get("/{exam_id}/raw")
+async def get_exam_raw(exam_id: str):
+    """获取题目抽取前的 raw.md 原始文本"""
+    service = get_exam_service()
+    content = service.get_raw_markdown_content(exam_id)
+    if content is None:
+        raise HTTPException(status_code=404, detail="raw.md 不存在或试卷未完成 OCR")
+    return {"content": content}
+
+
 @router.patch("/{exam_id}/year")
 async def update_exam_year(exam_id: str, body: ExamYearUpdate):
     """更新试卷年份（解析后用户可编辑）"""

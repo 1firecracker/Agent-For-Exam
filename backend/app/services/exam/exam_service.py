@@ -397,6 +397,13 @@ class ExamService:
         """列出试卷"""
         return self.storage.list_exams(year=year, subject=subject)
     
+    def get_raw_markdown_content(self, exam_id: str) -> Optional[str]:
+        """获取题目抽取前的 raw.md 内容，不存在则返回 None"""
+        raw_path = self.storage.get_exam_dir(exam_id) / "raw.md"
+        if not raw_path.exists():
+            return None
+        return raw_path.read_text(encoding="utf-8")
+
     def delete_exam(self, exam_id: str) -> bool:
         """删除试卷"""
         return self.storage.delete_exam(exam_id)

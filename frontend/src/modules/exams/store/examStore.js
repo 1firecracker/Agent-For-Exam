@@ -139,6 +139,18 @@ export const useExamStore = defineStore('exam', () => {
     }
 
     /**
+     * 获取题目抽取前的 raw.md 原始文本
+     */
+    async function getExamRaw(examId) {
+        try {
+            return await examService.getExamRaw(examId)
+        } catch (err) {
+            error.value = err
+            throw err
+        }
+    }
+
+    /**
      * 删除试卷
      */
     async function deleteExam(examId) {
@@ -264,6 +276,7 @@ export const useExamStore = defineStore('exam', () => {
         uploadExam,
         getExamStatus,
         getExamDetail,
+        getExamRaw,
         deleteExam,
         reparseExam,
         updateExamYear,
