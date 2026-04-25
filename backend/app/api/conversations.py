@@ -2,12 +2,17 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+import app.config as config
+from app.services.config_service import config_service
 from app.services.conversation_service import ConversationService
+from app.services.document_service import DocumentService
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -37,6 +42,124 @@ class ConversationResponse(BaseModel):
 class ConversationListResponse(BaseModel):
     conversations: List[ConversationResponse]
     total: int
+
+
+class CheatsheetLayout(BaseModel):
+    paper_type: str = "A4"
+    orientation: str = "portrait"
+    font_size: int = Field(default=10, ge=8, le=14)
+    line_height: float = Field(default=1.2, ge=1.0, le=1.5)
+    margin: str = "narrow"
+    columns: int = Field(default=2, ge=1, le=4)
+
+
+class CheatsheetContentOptions(BaseModel):
+    density: str = "standard"
+    include_formulas: bool = True
+    include_definitions: bool = True
+    include_algorithms: bool = True
+    include_examples: bool = True
+    include_page_refs: bool = True
+
+
+class CheatsheetGenerateRequest(BaseModel):
+    subject_id: str
+    document_ids: List[str]
+    layout: CheatsheetLayout = Field(default_factory=CheatsheetLayout)
+    content_options: CheatsheetContentOptions = Field(default_factory=CheatsheetContentOptions)
+    language: str = "auto"
+    style: str = "auto"
+    user_prompt: Optional[str] = None
+
+
+class CheatsheetUpdateRequest(BaseModel):
+    content: str
+    layout: Optional[CheatsheetLayout] = None
+    content_options: Optional[CheatsheetContentOptions] = None
+    language: Optional[str] = None
+    style: Optional[str] = None
+    user_prompt: Optional[str] = None
+
+
+def _cheatsheet_file(conversation_id: str) -> Path:
+    return Path(config.settings.conversations_dir) / conversation_id / "cheatsheet.json"
+
+
+def _load_cheatsheet(conversation_id: str) -> Optional[Dict[str, Any]]:
+    file_path = _cheatsheet_file(conversation_id)
+    if not file_path.exists():
+        return None
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _save_cheatsheet(conversation_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    file_path = _cheatsheet_file(conversation_id)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    now = datetime.utcnow().isoformat() + "Z"
+    existing = _load_cheatsheet(conversation_id) or {}
+    payload = {
+        **existing,
+        **data,
+        "conversation_id": conversation_id,
+        "updated_at": now,
+        "created_at": existing.get("created_at", now),
+    }
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return payload
+
+
+def _delete_cheatsheet(conversation_id: str) -> bool:
+    file_path = _cheatsheet_file(conversation_id)
+    if not file_path.exists():
+        return False
+    file_path.unlink()
+    return True
+
+
+def _json_event(event: str, data: Dict[str, Any]) -> str:
+    return f"data: {json.dumps({'event': event, **data}, ensure_ascii=False)}\n\n"
+
+
+def _build_cheatsheet_prompt(
+    documents: List[Dict[str, str]],
+    request: CheatsheetGenerateRequest,
+) -> str:
+    options = request.content_options
+    layout = request.layout
+    doc_text = "\n\n".join(
+        f"## 文档：{doc['filename']}\n{doc['text']}" for doc in documents
+    )
+    custom_prompt = request.user_prompt.strip() if request.user_prompt else "请生成适合考试复习的 cheatsheet。"
+    return f"""你是考试复习 cheatsheet 编写助手。请严格基于以下讲义内容生成 Markdown cheatsheet，不要编造讲义外信息。
+
+用户提示词：
+{custom_prompt}
+
+生成风格：{request.style}
+语言偏好：{request.language}（auto 表示默认使用讲义主要语言）
+内容密度：{options.density}
+排版约束：纸张 {layout.paper_type}，方向 {layout.orientation}，字号 {layout.font_size}px，{layout.columns} 栏。
+内容选项：
+- 包含公式：{options.include_formulas}
+- 包含定义：{options.include_definitions}
+- 包含算法步骤：{options.include_algorithms}
+- 包含例题提示：{options.include_examples}
+- 包含页码引用：{options.include_page_refs}
+
+输出要求：
+- 只输出 Markdown 内容。
+- 优先短句、列表、表格和公式块，适配高密度打印。
+- 如能判断页码，请保留文件名和页码引用。
+- 如果讲义内容不足以支持某项内容，请省略该项，不要补写。
+
+讲义内容：
+{doc_text}
+"""
 
 
 @router.post("", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
@@ -481,4 +604,181 @@ async def reset_messages(conversation_id: str, request: MessageResetRequest):
         )
     
     return {"status": "success"}
+
+
+@router.get("/{conversation_id}/cheatsheet")
+async def get_cheatsheet(conversation_id: str):
+    service = ConversationService()
+    if not service.get_conversation(conversation_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="对话不存在")
+    data = _load_cheatsheet(conversation_id)
+    return {"exists": data is not None, "cheatsheet": data}
+
+
+@router.patch("/{conversation_id}/cheatsheet")
+async def update_cheatsheet(conversation_id: str, request: CheatsheetUpdateRequest):
+    service = ConversationService()
+    if not service.get_conversation(conversation_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="对话不存在")
+    data = _save_cheatsheet(
+        conversation_id,
+        {
+            "content": request.content,
+            "layout": request.layout.model_dump() if request.layout else None,
+            "content_options": request.content_options.model_dump() if request.content_options else None,
+            "language": request.language,
+            "style": request.style,
+            "user_prompt": request.user_prompt,
+            "status": "saved",
+        },
+    )
+    return {"status": "success", "cheatsheet": data}
+
+
+@router.delete("/{conversation_id}/cheatsheet", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_cheatsheet(conversation_id: str):
+    service = ConversationService()
+    if not service.get_conversation(conversation_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="对话不存在")
+    file_path = _cheatsheet_file(conversation_id)
+    if file_path.exists():
+        file_path.unlink()
+    return None
+
+
+@router.post("/{conversation_id}/cheatsheet/generate")
+async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateRequest):
+    service = ConversationService()
+    conversation = service.get_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="对话不存在")
+    if conversation.get("subject_id") != request.subject_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="subject 与当前对话不匹配")
+    if not request.document_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请选择至少一个 PDF 讲义文档")
+
+    doc_service = DocumentService()
+    subject_docs = {doc["file_id"]: doc for doc in doc_service.list_documents_for_subject(request.subject_id)}
+    selected_docs = []
+    for document_id in request.document_ids:
+        doc = subject_docs.get(document_id)
+        if not doc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"文档不存在: {document_id}")
+        if doc.get("status") != "completed":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"文档尚未处理完成: {doc.get('filename')}")
+        if doc.get("file_extension") != "pdf":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cheatsheet MVP 仅支持 PDF 讲义: {doc.get('filename')}")
+        file_path = doc_service.file_manager.get_file_path_for_subject(request.subject_id, document_id)
+        if not file_path or not file_path.exists():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"文档文件不存在: {doc.get('filename')}")
+        selected_docs.append((doc, file_path))
+
+    chat_config = config_service.get_config("chat")
+    api_key = chat_config.get("api_key")
+    if not api_key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Chat LLM API Key 未配置")
+
+    async def event_stream():
+        def emit(event: str, payload: Dict[str, Any]):
+            return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False)}\n\n"
+
+        try:
+            yield emit("progress", {"message": "正在读取 PDF 讲义", "current": 0, "total": len(selected_docs)})
+            doc_sections = []
+            for index, (doc, file_path) in enumerate(selected_docs, 1):
+                yield emit("progress", {"message": f"正在解析 {doc['filename']}", "current": index, "total": len(selected_docs)})
+                text = doc_service.document_parser.extract_text(str(file_path), file_id=doc["file_id"])
+                text = (text or "").strip()
+                if not text:
+                    yield emit("warning", {"message": f"{doc['filename']} 未提取到文本，已跳过"})
+                    continue
+                doc_sections.append(f"=== {doc['filename']} ({doc['file_id']}) ===\n{text[:18000]}")
+
+            if not doc_sections:
+                yield emit("error", {"message": "没有可用于生成 cheatsheet 的 PDF 文本"})
+                return
+
+            options = request.content_options.model_dump()
+            layout = request.layout.model_dump()
+            prompt = f"""
+你是考试速查表生成助手。请严格基于用户选择的 PDF 讲义生成 cheatsheet，输出 Markdown。
+
+要求：
+- 默认使用讲义主要语言；如果 language 不是 auto，则遵循 language={request.language}
+- 风格 style={request.style}，用户提示词优先：{request.user_prompt or "无"}
+- 内容密度 density={options["density"]}
+- 是否包含公式={options["include_formulas"]}，定义={options["include_definitions"]}，算法步骤={options["include_algorithms"]}，例题提示={options["include_examples"]}，页码引用={options["include_page_refs"]}
+- 适配密集排版：短句、列表、表格优先，避免长段落
+- 不要编造讲义中不存在的信息
+- 若能识别页码，请用 [文件名 p.X] 形式标注引用
+
+排版参数仅供内容密度参考：{json.dumps(layout, ensure_ascii=False)}
+
+讲义内容：
+{chr(10).join(doc_sections)}
+""".strip()
+
+            payload = {
+                "model": chat_config.get("model"),
+                "messages": [
+                    {"role": "system", "content": "你只输出可直接放入 cheatsheet 的 Markdown 内容。"},
+                    {"role": "user", "content": prompt},
+                ],
+                "stream": True,
+                "temperature": 0.2,
+            }
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            url = f"{chat_config.get('host', '').rstrip('/')}/chat/completions"
+            content_parts = []
+            yield emit("progress", {"message": "正在调用 LLM 生成 cheatsheet", "current": len(selected_docs), "total": len(selected_docs)})
+
+            async with httpx.AsyncClient(timeout=config.settings.timeout) as client:
+                async with client.stream("POST", url, headers=headers, json=payload) as response:
+                    if response.status_code >= 400:
+                        error_text = await response.aread()
+                        yield emit("error", {"message": f"LLM API 错误: {response.status_code}, {error_text.decode('utf-8', errors='replace')[:500]}"})
+                        return
+                    async for line in response.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        raw = line[5:].strip()
+                        if raw == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(raw)
+                            delta = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                        except Exception:
+                            delta = ""
+                        if delta:
+                            content_parts.append(delta)
+                            yield emit("chunk", {"content": delta})
+
+            content = "".join(content_parts).strip()
+            if not content:
+                yield emit("error", {"message": "LLM 未返回 cheatsheet 内容"})
+                return
+
+            saved = _save_cheatsheet(
+                conversation_id,
+                {
+                    "status": "completed",
+                    "content": content,
+                    "layout": layout,
+                    "content_options": options,
+                    "language": request.language,
+                    "style": request.style,
+                    "user_prompt": request.user_prompt,
+                    "document_ids": request.document_ids,
+                    "documents": [{"file_id": doc["file_id"], "filename": doc["filename"]} for doc, _ in selected_docs],
+                },
+            )
+            yield emit("done", {"cheatsheet": saved})
+        except Exception as exc:
+            yield emit("error", {"message": str(exc)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
