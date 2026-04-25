@@ -225,7 +225,7 @@ def _build_cheatsheet_backfill_prompt(
 """
 
 
-def _build_faithful_transcription(filename: str, text: str) -> str:
+def _extract_pdf_pages(text: str) -> List[Dict[str, Any]]:
     pages: List[Dict[str, Any]] = []
     current_page: Optional[Dict[str, Any]] = None
 
@@ -247,16 +247,44 @@ def _build_faithful_transcription(filename: str, text: str) -> str:
             pages.append(current_page)
         current_page["lines"].append(line)
 
-    output = [f"# {filename} Cheatsheet", ""]
-    for page in pages:
-        page_no = page["page"]
-        file_id = page["file_id"]
-        output.append(f"## Page {page_no} [FILE:{file_id}][PAGE:{page_no}]")
-        output.append("")
-        for line in page["lines"]:
-            output.append(line)
-        output.append("")
-    return "\n".join(output).strip()
+    return pages
+
+
+def _build_faithful_page_prompt(filename: str, page: Dict[str, Any], request: CheatsheetGenerateRequest) -> str:
+    custom_prompt = request.user_prompt.strip() if request.user_prompt else "完整保留所有有效内容，逐页逐条转写原文，不要摘要，不要合并。"
+    page_text = "\n".join(page.get("lines", []))
+    return f"""你是讲义 cheatsheet 的逐页转写助手。请把当前 PDF 页面转写成 Markdown cheatsheet。
+
+硬性要求：
+- 必须使用 LLM 进行轻量整理，但不能摘要、不能合并、不能省略。
+- 保留当前页面所有有效内容，尤其是编号列表、项目符号、定义、术语、公式、步骤、例子、提示。
+- 如果原文有 12 个编号项，输出也必须有 12 个对应编号项。
+- 重复内容也要保留，不要写“同上 / identical / duplicates / not repeated”。
+- 只能转写原文明确出现的内容，禁止补充外部知识。
+- 只输出 Markdown，不要代码围栏。
+- 用户要求：{custom_prompt}
+
+文档：{filename}
+页码：[FILE:{page.get("file_id", "")}][PAGE:{page.get("page", "?")}]
+
+原文页面内容：
+{page_text}
+"""
+
+
+def _build_faithful_missing_lines(page: Dict[str, Any], generated: str) -> str:
+    source_numbered = [line for line in page.get("lines", []) if re.match(r"^\d+\.\s+", line)]
+    generated_numbered_count = len(re.findall(r"^\s*\d+\.\s+", generated, flags=re.MULTILINE))
+    if generated_numbered_count >= len(source_numbered):
+        return ""
+
+    missing = source_numbered[generated_numbered_count:]
+    if not missing:
+        return ""
+
+    output = ["", "### 原文逐条补全", ""]
+    output.extend(missing)
+    return "\n".join(output)
 
 
 @router.post("", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
@@ -805,15 +833,82 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
 
             layout = request.layout.model_dump()
             options = request.content_options.model_dump()
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            url = f"{chat_config.get('host', '').rstrip('/')}/chat/completions"
+
+            async def stream_llm(client: httpx.AsyncClient, prompt_text: str):
+                payload = {
+                    "model": chat_config.get("model"),
+                    "messages": [
+                        {"role": "system", "content": "你只输出 Markdown cheatsheet 内容；禁止代码围栏；必须保留原文有效内容。"},
+                        {"role": "user", "content": prompt_text},
+                    ],
+                    "stream": True,
+                    "temperature": 0.05,
+                    "max_tokens": 8192,
+                }
+                async with client.stream("POST", url, headers=headers, json=payload) as response:
+                    if response.status_code >= 400:
+                        error_text = await response.aread()
+                        raise RuntimeError(f"LLM API 错误: {response.status_code}, {error_text.decode('utf-8', errors='replace')[:500]}")
+                    async for line in response.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        raw = line[5:].strip()
+                        if raw == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(raw)
+                            delta = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                        except Exception:
+                            delta = ""
+                        if delta:
+                            yield delta
+
             faithful_mode = request.style in ("faithful", "auto")
             if faithful_mode:
-                yield emit("progress", {"message": "正在按原文逐页转写 cheatsheet", "current": 1, "total": 1})
                 content_parts = []
+                page_jobs = []
                 for doc, file_path in selected_docs:
                     text = (doc_service.document_parser.extract_text(str(file_path), file_id=doc["file_id"]) or "").strip()
-                    faithful_content = _build_faithful_transcription(doc["filename"], text)
-                    content_parts.append(faithful_content)
-                    yield emit("chunk", {"content": faithful_content})
+                    for page in _extract_pdf_pages(text):
+                        page_jobs.append({"doc": doc, "page": page})
+
+                if not page_jobs:
+                    yield emit("error", {"message": "没有可用于逐页转写的 PDF 文本"})
+                    return
+
+                async with httpx.AsyncClient(timeout=config.settings.timeout) as client:
+                    for page_index, job in enumerate(page_jobs, 1):
+                        doc = job["doc"]
+                        page = job["page"]
+                        heading = f"\n\n## Page {page.get('page', '?')} [FILE:{page.get('file_id', '')}][PAGE:{page.get('page', '?')}]\n\n"
+                        content_parts.append(heading)
+                        yield emit("chunk", {"content": heading})
+                        yield emit(
+                            "progress",
+                            {
+                                "message": f"正在用 LLM 逐页转写 {doc['filename']} 第 {page.get('page', '?')} 页",
+                                "current": page_index,
+                                "total": len(page_jobs),
+                            },
+                        )
+
+                        page_parts = []
+                        prompt = _build_faithful_page_prompt(doc["filename"], page, request)
+                        try:
+                            async for delta in stream_llm(client, prompt):
+                                page_parts.append(delta)
+                                content_parts.append(delta)
+                                yield emit("chunk", {"content": delta})
+                        except RuntimeError as exc:
+                            yield emit("error", {"message": str(exc)})
+                            return
+
+                        missing = _build_faithful_missing_lines(page, "".join(page_parts))
+                        if missing:
+                            content_parts.append(missing)
+                            yield emit("chunk", {"content": missing})
 
                 content = "\n\n".join(content_parts).strip()
                 saved = _save_cheatsheet(
@@ -833,8 +928,6 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
                 yield emit("done", {"cheatsheet": saved})
                 return
 
-            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-            url = f"{chat_config.get('host', '').rstrip('/')}/chat/completions"
             content_parts = []
             total_jobs = len(generation_jobs)
 
@@ -852,35 +945,6 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
                         },
                     )
 
-                    async def stream_llm(prompt_text: str):
-                        payload = {
-                            "model": chat_config.get("model"),
-                            "messages": [
-                                {"role": "system", "content": "你只输出 Markdown cheatsheet 内容；禁止代码围栏；默认紧密转写原文知识点。"},
-                                {"role": "user", "content": prompt_text},
-                            ],
-                            "stream": True,
-                            "temperature": 0.05,
-                        "max_tokens": 8192,
-                        }
-                        async with client.stream("POST", url, headers=headers, json=payload) as response:
-                            if response.status_code >= 400:
-                                error_text = await response.aread()
-                                raise RuntimeError(f"LLM API 错误: {response.status_code}, {error_text.decode('utf-8', errors='replace')[:500]}")
-                            async for line in response.aiter_lines():
-                                if not line or not line.startswith("data:"):
-                                    continue
-                                raw = line[5:].strip()
-                                if raw == "[DONE]":
-                                    break
-                                try:
-                                    data = json.loads(raw)
-                                    delta = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                                except Exception:
-                                    delta = ""
-                                if delta:
-                                    yield delta
-
                     try:
                         prompt = _build_cheatsheet_chunk_prompt(
                             job["filename"],
@@ -890,7 +954,7 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
                             request,
                         )
                         chunk_parts = []
-                        async for delta in stream_llm(prompt):
+                        async for delta in stream_llm(client, prompt):
                             chunk_parts.append(delta)
                             content_parts.append(delta)
                             yield emit("chunk", {"content": delta})
@@ -902,7 +966,7 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
                             yield emit("chunk", {"content": backfill_heading})
                             yield emit("progress", {"message": f"正在补漏扩写 {job['filename']} 第 {job['chunk_index']}/{job['total_chunks']} 段", "current": job_index, "total": total_jobs})
                             backfill_prompt = _build_cheatsheet_backfill_prompt(job["filename"], job["text"], chunk_output, request)
-                            async for delta in stream_llm(backfill_prompt):
+                            async for delta in stream_llm(client, backfill_prompt):
                                 content_parts.append(delta)
                                 yield emit("chunk", {"content": delta})
                     except RuntimeError as exc:

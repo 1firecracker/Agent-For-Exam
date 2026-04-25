@@ -329,12 +329,18 @@
               ></textarea>
               <div v-else-if="cheatsheetContent" class="cheatsheet-preview-wrap cheatsheet-generated-wrap">
                 <div class="cheatsheet-preview" :style="cheatsheetPreviewStyle">
-                  <div class="cheatsheet-page cheatsheet-generated-page" :style="cheatsheetPageStyle">
+                  <div
+                    v-for="(pageContent, pageIndex) in paginatedCheatsheetPages"
+                    :key="pageIndex"
+                    class="cheatsheet-page cheatsheet-generated-page"
+                    :style="cheatsheetPageStyle"
+                  >
                     <div
                       class="cheatsheet-page-content cheatsheet-markdown-content"
                       :style="cheatsheetContentStyle"
-                      v-html="renderMarkdown(cheatsheetContent)"
+                      v-html="renderMarkdown(pageContent)"
                     ></div>
+                    <div class="cheatsheet-page-number">Page {{ pageIndex + 1 }}</div>
                   </div>
                 </div>
               </div>
@@ -665,7 +671,7 @@ const cheatsheetPageStyle = computed(() => {
 const cheatsheetContentStyle = computed(() => ({
   fontSize: `${cheatsheetLayout.value.font_size}px`,
   lineHeight: cheatsheetLayout.value.line_height,
-  columnCount: cheatsheetLayout.value.columns,
+  columnCount: cheatsheetEditMode.value ? cheatsheetLayout.value.columns : 1,
   columnGap: '12px'
 }))
 
@@ -673,7 +679,8 @@ const cheatsheetPreviewStyle = computed(() => ({
   '--cheatsheet-font-size': `${cheatsheetLayout.value.font_size}px`,
   '--cheatsheet-line-height': cheatsheetLayout.value.line_height,
   '--cheatsheet-columns': cheatsheetLayout.value.columns,
-  '--cheatsheet-preview-scale': cheatsheetLayout.value.orientation === 'landscape' ? 0.72 : 0.9
+  '--cheatsheet-preview-scale': cheatsheetLayout.value.orientation === 'landscape' ? 0.72 : 0.9,
+  '--cheatsheet-result-scale': cheatsheetLayout.value.orientation === 'landscape' ? 0.55 : 0.68
 }))
 
 watch(completedPdfDocuments, (docs) => {
@@ -687,6 +694,66 @@ const stripMarkdownFence = (text) => {
 }
 
 const renderMarkdown = (text) => formatEnhancedMarkdown(stripMarkdownFence(text))
+
+const splitMarkdownBlocks = (text) => {
+  const normalized = stripMarkdownFence(text)
+  if (!normalized) return []
+  const blocks = []
+  let current = []
+  for (const line of normalized.split('\n')) {
+    const startsNewBlock = /^(#{1,6}\s+|\d+\.\s+|[-*]\s+)/.test(line.trim())
+    if (startsNewBlock && current.length) {
+      blocks.push(current.join('\n').trim())
+      current = []
+    }
+    current.push(line)
+    if (!line.trim() && current.some(item => item.trim())) {
+      blocks.push(current.join('\n').trim())
+      current = []
+    }
+  }
+  if (current.some(item => item.trim())) {
+    blocks.push(current.join('\n').trim())
+  }
+  return blocks.filter(Boolean)
+}
+
+const estimateBlockWeight = (block) => {
+  const lines = block.split('\n').length
+  const chars = block.length
+  const headingBonus = /^#{1,6}\s+/.test(block.trim()) ? 2 : 0
+  const tableBonus = block.includes('|') ? 3 : 0
+  return Math.max(1, Math.ceil(chars / 95) + lines + headingBonus + tableBonus)
+}
+
+const cheatsheetPageCapacity = computed(() => {
+  const base = cheatsheetLayout.value.orientation === 'landscape' ? 26 : 42
+  const fontFactor = 10 / cheatsheetLayout.value.font_size
+  const lineFactor = 1.2 / cheatsheetLayout.value.line_height
+  return Math.max(12, Math.floor(base * fontFactor * lineFactor))
+})
+
+const paginatedCheatsheetPages = computed(() => {
+  const blocks = splitMarkdownBlocks(cheatsheetContent.value)
+  if (!blocks.length) return []
+  const pages = []
+  let current = []
+  let weight = 0
+  for (const block of blocks) {
+    const blockWeight = estimateBlockWeight(block)
+    if (current.length && weight + blockWeight > cheatsheetPageCapacity.value) {
+      pages.push(current.join('\n\n'))
+      current = []
+      weight = 0
+    }
+    current.push(block)
+    weight += blockWeight
+  }
+  if (current.length) {
+    pages.push(current.join('\n\n'))
+  }
+  return pages
+})
 
 const openCheatsheetDialog = () => {
   if (!canOpenCheatsheet.value) return
@@ -2739,10 +2806,22 @@ const formatEnhancedMarkdown = (text) => {
   min-width: fit-content;
 }
 
+.cheatsheet-generated-wrap .cheatsheet-preview {
+  transform: scale(var(--cheatsheet-result-scale));
+  transform-origin: top center;
+  margin-bottom: calc((var(--cheatsheet-result-scale) - 1) * 100%);
+}
+
 .cheatsheet-dialog .cheatsheet-preview {
   transform: scale(0.82);
   transform-origin: top center;
   margin-bottom: -12%;
+}
+
+.cheatsheet-generated-wrap .cheatsheet-preview {
+  transform: scale(0.72);
+  transform-origin: top center;
+  margin-bottom: -22%;
 }
 
 .cheatsheet-page {
@@ -2757,6 +2836,13 @@ const formatEnhancedMarkdown = (text) => {
   text-align: justify;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.cheatsheet-page-number {
+  margin-top: 8px;
+  color: #6b7280;
+  font-size: 10px;
+  text-align: center;
 }
 
 .cheatsheet-placeholder-text {
