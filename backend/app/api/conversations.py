@@ -125,22 +125,48 @@ def _json_event(event: str, data: Dict[str, Any]) -> str:
     return f"data: {json.dumps({'event': event, **data}, ensure_ascii=False)}\n\n"
 
 
-def _build_cheatsheet_prompt(
-    documents: List[Dict[str, str]],
+def _chunk_text(text: str, max_chars: int = 6500) -> List[str]:
+    """Split lecture text into stable chunks so the LLM covers more source material."""
+    chunks = []
+    current = []
+    current_len = 0
+    for block in text.split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        block_len = len(block)
+        if current and current_len + block_len > max_chars:
+            chunks.append("\n\n".join(current))
+            current = []
+            current_len = 0
+        if block_len > max_chars:
+            for start in range(0, block_len, max_chars):
+                chunks.append(block[start:start + max_chars])
+            continue
+        current.append(block)
+        current_len += block_len
+    if current:
+        chunks.append("\n\n".join(current))
+    return chunks
+
+
+def _build_cheatsheet_chunk_prompt(
+    filename: str,
+    chunk_text: str,
+    chunk_index: int,
+    total_chunks: int,
     request: CheatsheetGenerateRequest,
 ) -> str:
     options = request.content_options
     layout = request.layout
-    doc_text = "\n\n".join(
-        f"## 文档：{doc['filename']}\n{doc['text']}" for doc in documents
-    )
-    custom_prompt = request.user_prompt.strip() if request.user_prompt else "请生成适合考试复习的 cheatsheet。"
-    return f"""你是考试复习 cheatsheet 编写助手。请严格基于以下讲义内容生成 Markdown cheatsheet，不要编造讲义外信息。
+    style = request.style if request.style and request.style != "auto" else "faithful"
+    custom_prompt = request.user_prompt.strip() if request.user_prompt else "尽量把原文知识点紧密转写到 cheatsheet 中，少做抽象总结。"
+    return f"""你是考试复习 cheatsheet 编写助手。请严格基于当前讲义片段生成 Markdown cheatsheet，不要编造讲义外信息。
 
 用户提示词：
 {custom_prompt}
 
-生成风格：{request.style}
+生成风格：{style}
 语言偏好：{request.language}（auto 表示默认使用讲义主要语言）
 内容密度：{options.density}
 排版约束：纸张 {layout.paper_type}，方向 {layout.orientation}，字号 {layout.font_size}px，{layout.columns} 栏。
@@ -152,13 +178,18 @@ def _build_cheatsheet_prompt(
 - 包含页码引用：{options.include_page_refs}
 
 输出要求：
-- 只输出 Markdown 内容。
+- 只输出 Markdown 内容，绝对不要使用 ``` 或 ```markdown 代码围栏。
+- 默认采用“完全尊重原文紧密转写”：尽量覆盖输入片段里的每个概念、定义、步骤、术语和例子，而不是只总结 3-5 条。
+- 保留原文层级和术语；可压缩措辞，但不要丢关键限定条件。
 - 优先短句、列表、表格和公式块，适配高密度打印。
 - 如能判断页码，请保留文件名和页码引用。
 - 如果讲义内容不足以支持某项内容，请省略该项，不要补写。
 
-讲义内容：
-{doc_text}
+当前文档：{filename}
+当前片段：{chunk_index}/{total_chunks}
+
+讲义片段内容：
+{chunk_text}
 """
 
 
@@ -684,74 +715,85 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
 
         try:
             yield emit("progress", {"message": "正在读取 PDF 讲义", "current": 0, "total": len(selected_docs)})
-            doc_sections = []
-            for index, (doc, file_path) in enumerate(selected_docs, 1):
-                yield emit("progress", {"message": f"正在解析 {doc['filename']}", "current": index, "total": len(selected_docs)})
-                text = doc_service.document_parser.extract_text(str(file_path), file_id=doc["file_id"])
-                text = (text or "").strip()
+            generation_jobs = []
+            for doc_index, (doc, file_path) in enumerate(selected_docs, 1):
+                yield emit("progress", {"message": f"正在解析 {doc['filename']}", "current": doc_index, "total": len(selected_docs)})
+                text = (doc_service.document_parser.extract_text(str(file_path), file_id=doc["file_id"]) or "").strip()
                 if not text:
                     yield emit("warning", {"message": f"{doc['filename']} 未提取到文本，已跳过"})
                     continue
-                doc_sections.append(f"=== {doc['filename']} ({doc['file_id']}) ===\n{text[:18000]}")
 
-            if not doc_sections:
+                chunks = _chunk_text(text)
+                for chunk_index, chunk in enumerate(chunks, 1):
+                    generation_jobs.append({
+                        "filename": doc["filename"],
+                        "file_id": doc["file_id"],
+                        "chunk_index": chunk_index,
+                        "total_chunks": len(chunks),
+                        "text": chunk,
+                    })
+
+            if not generation_jobs:
                 yield emit("error", {"message": "没有可用于生成 cheatsheet 的 PDF 文本"})
                 return
 
-            options = request.content_options.model_dump()
             layout = request.layout.model_dump()
-            prompt = f"""
-你是考试速查表生成助手。请严格基于用户选择的 PDF 讲义生成 cheatsheet，输出 Markdown。
-
-要求：
-- 默认使用讲义主要语言；如果 language 不是 auto，则遵循 language={request.language}
-- 风格 style={request.style}，用户提示词优先：{request.user_prompt or "无"}
-- 内容密度 density={options["density"]}
-- 是否包含公式={options["include_formulas"]}，定义={options["include_definitions"]}，算法步骤={options["include_algorithms"]}，例题提示={options["include_examples"]}，页码引用={options["include_page_refs"]}
-- 适配密集排版：短句、列表、表格优先，避免长段落
-- 不要编造讲义中不存在的信息
-- 若能识别页码，请用 [文件名 p.X] 形式标注引用
-
-排版参数仅供内容密度参考：{json.dumps(layout, ensure_ascii=False)}
-
-讲义内容：
-{chr(10).join(doc_sections)}
-""".strip()
-
-            payload = {
-                "model": chat_config.get("model"),
-                "messages": [
-                    {"role": "system", "content": "你只输出可直接放入 cheatsheet 的 Markdown 内容。"},
-                    {"role": "user", "content": prompt},
-                ],
-                "stream": True,
-                "temperature": 0.2,
-            }
+            options = request.content_options.model_dump()
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
             url = f"{chat_config.get('host', '').rstrip('/')}/chat/completions"
             content_parts = []
-            yield emit("progress", {"message": "正在调用 LLM 生成 cheatsheet", "current": len(selected_docs), "total": len(selected_docs)})
+            total_jobs = len(generation_jobs)
 
             async with httpx.AsyncClient(timeout=config.settings.timeout) as client:
-                async with client.stream("POST", url, headers=headers, json=payload) as response:
-                    if response.status_code >= 400:
-                        error_text = await response.aread()
-                        yield emit("error", {"message": f"LLM API 错误: {response.status_code}, {error_text.decode('utf-8', errors='replace')[:500]}"})
-                        return
-                    async for line in response.aiter_lines():
-                        if not line or not line.startswith("data:"):
-                            continue
-                        raw = line[5:].strip()
-                        if raw == "[DONE]":
-                            break
-                        try:
-                            data = json.loads(raw)
-                            delta = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                        except Exception:
-                            delta = ""
-                        if delta:
-                            content_parts.append(delta)
-                            yield emit("chunk", {"content": delta})
+                for job_index, job in enumerate(generation_jobs, 1):
+                    heading = f"\n\n## {job['filename']} - Part {job['chunk_index']}/{job['total_chunks']}\n\n"
+                    content_parts.append(heading)
+                    yield emit("chunk", {"content": heading})
+                    yield emit(
+                        "progress",
+                        {
+                            "message": f"正在生成 {job['filename']} 第 {job['chunk_index']}/{job['total_chunks']} 段",
+                            "current": job_index,
+                            "total": total_jobs,
+                        },
+                    )
+
+                    prompt = _build_cheatsheet_chunk_prompt(
+                        job["filename"],
+                        job["text"],
+                        job["chunk_index"],
+                        job["total_chunks"],
+                        request,
+                    )
+                    payload = {
+                        "model": chat_config.get("model"),
+                        "messages": [
+                            {"role": "system", "content": "你只输出 Markdown cheatsheet 内容；禁止代码围栏；默认紧密转写原文知识点。"},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "stream": True,
+                        "temperature": 0.1,
+                    }
+
+                    async with client.stream("POST", url, headers=headers, json=payload) as response:
+                        if response.status_code >= 400:
+                            error_text = await response.aread()
+                            yield emit("error", {"message": f"LLM API 错误: {response.status_code}, {error_text.decode('utf-8', errors='replace')[:500]}"})
+                            return
+                        async for line in response.aiter_lines():
+                            if not line or not line.startswith("data:"):
+                                continue
+                            raw = line[5:].strip()
+                            if raw == "[DONE]":
+                                break
+                            try:
+                                data = json.loads(raw)
+                                delta = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                            except Exception:
+                                delta = ""
+                            if delta:
+                                content_parts.append(delta)
+                                yield emit("chunk", {"content": delta})
 
             content = "".join(content_parts).strip()
             if not content:

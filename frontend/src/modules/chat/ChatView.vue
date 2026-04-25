@@ -685,7 +685,13 @@ watch(completedPdfDocuments, (docs) => {
   selectedCheatsheetDocumentIds.value = docs.map(doc => doc.file_id)
 }, { immediate: true })
 
-const renderMarkdown = (text) => formatEnhancedMarkdown(text || '')
+const stripMarkdownFence = (text) => {
+  const content = (text || '').trim()
+  const match = content.match(/^```(?:markdown|md)?\s*([\s\S]*?)\s*```$/i)
+  return match ? match[1].trim() : content
+}
+
+const renderMarkdown = (text) => formatEnhancedMarkdown(stripMarkdownFence(text))
 
 const openCheatsheetDialog = () => {
   if (!canOpenCheatsheet.value) return
@@ -2755,6 +2761,7 @@ const formatEnhancedMarkdown = (text) => {
 .cheatsheet-page-content {
   text-align: justify;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .cheatsheet-placeholder-text {
@@ -2779,6 +2786,7 @@ const formatEnhancedMarkdown = (text) => {
 
 .cheatsheet-page-content :deep(table) {
   border-collapse: collapse;
+  table-layout: fixed;
   width: 100%;
 }
 
@@ -2787,6 +2795,19 @@ const formatEnhancedMarkdown = (text) => {
   border: 1px solid #d1d5db;
   padding: 3px 5px;
   vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.cheatsheet-page-content :deep(pre) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.cheatsheet-page-content :deep(code) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .cheatsheet-document-hint {
