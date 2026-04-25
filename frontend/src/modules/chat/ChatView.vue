@@ -408,11 +408,6 @@
             <el-option label="精简压缩" value="concise" />
             <el-option label="自动分析要点" value="auto" />
           </el-select>
-          <el-checkbox v-model="cheatsheetOptions.include_formulas">包含公式</el-checkbox>
-          <el-checkbox v-model="cheatsheetOptions.include_definitions">包含定义</el-checkbox>
-          <el-checkbox v-model="cheatsheetOptions.include_algorithms">包含算法步骤</el-checkbox>
-          <el-checkbox v-model="cheatsheetOptions.include_examples">包含例题提示</el-checkbox>
-          <el-checkbox v-model="cheatsheetOptions.include_page_refs">包含页码引用</el-checkbox>
           <label>自定义提示词</label>
           <el-input
             v-model="cheatsheetPrompt"
