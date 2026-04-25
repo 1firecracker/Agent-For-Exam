@@ -125,7 +125,7 @@ def _json_event(event: str, data: Dict[str, Any]) -> str:
     return f"data: {json.dumps({'event': event, **data}, ensure_ascii=False)}\n\n"
 
 
-def _chunk_text(text: str, max_chars: int = 6500) -> List[str]:
+def _chunk_text(text: str, max_chars: int = 1800) -> List[str]:
     """Split lecture text into stable chunks so the LLM covers more source material."""
     chunks = []
     current = []
@@ -161,6 +161,7 @@ def _build_cheatsheet_chunk_prompt(
     layout = request.layout
     style = request.style if request.style and request.style != "auto" else "faithful"
     custom_prompt = request.user_prompt.strip() if request.user_prompt else "尽量把原文知识点紧密转写到 cheatsheet 中，少做抽象总结。"
+    min_items = max(10, min(36, len(chunk_text) // 90))
     return f"""你是考试复习 cheatsheet 编写助手。请严格基于当前讲义片段生成 Markdown cheatsheet，不要编造讲义外信息。
 
 用户提示词：
@@ -179,16 +180,46 @@ def _build_cheatsheet_chunk_prompt(
 
 输出要求：
 - 只输出 Markdown 内容，绝对不要使用 ``` 或 ```markdown 代码围栏。
-- 默认采用“完全尊重原文紧密转写”：尽量覆盖输入片段里的每个概念、定义、步骤、术语和例子，而不是只总结 3-5 条。
-- 保留原文层级和术语；可压缩措辞，但不要丢关键限定条件。
+- 默认采用“完全尊重原文紧密转写”：这是逐行/逐句提取式整理，不是摘要。必须为输入片段里的每个有效句子、项目符号、概念、定义、步骤、术语、例子、约束、对比和结论生成对应内容，而不是只总结 3-5 条。
+- 只能转写、压缩、重排原文明确出现的内容；禁止补充原文没有出现的例子、算法、术语、应用场景或背景知识。
+- 保留原文层级、顺序和术语；可压缩措辞，但不要丢关键限定条件。
+- 当前片段至少输出 {min_items} 条有效要点；如果原文有效要点少于该数量，按实际数量输出。若原文存在重复页，也要至少完整写出一页的全部有效内容。
+- 对列表/流程/表格型原文，逐项保留；不要合并成一句泛泛概括。
+- 不要用 “all concepts appear identically / 内容重复” 这类一句话替代重复页或重复项目；如果多页重复出现，应保留首次内容并标注覆盖页码。
 - 优先短句、列表、表格和公式块，适配高密度打印。
 - 如能判断页码，请保留文件名和页码引用。
-- 如果讲义内容不足以支持某项内容，请省略该项，不要补写。
+- 如果讲义内容不足以支持某项内容，请省略该项，不要补写；宁可少写，也不要添加外部知识。
 
 当前文档：{filename}
 当前片段：{chunk_index}/{total_chunks}
 
 讲义片段内容：
+{chunk_text}
+"""
+
+
+def _build_cheatsheet_backfill_prompt(
+    filename: str,
+    chunk_text: str,
+    existing_output: str,
+    request: CheatsheetGenerateRequest,
+) -> str:
+    custom_prompt = request.user_prompt.strip() if request.user_prompt else "尽量完整保留原文有效内容。"
+    return f"""上一轮 cheatsheet 输出明显过短。请对同一讲义片段做“补漏扩写”，只补充上一轮遗漏的有效内容。
+
+硬性要求：
+- 只输出 Markdown 片段；不要代码围栏。
+- 逐条检查原文每一行/每个项目，只补充上一轮遗漏的原文显式内容。
+- 不要重复上一轮已有内容；不要抽象总结；不要添加原文未出现的例子、算法、术语、应用场景或背景知识。
+- 如果没有遗漏的原文显式内容，只输出：无补充。
+- 用户提示词：{custom_prompt}
+
+文档：{filename}
+
+上一轮已有输出：
+{existing_output}
+
+原文片段：
 {chunk_text}
 """
 
@@ -758,42 +789,62 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
                         },
                     )
 
-                    prompt = _build_cheatsheet_chunk_prompt(
-                        job["filename"],
-                        job["text"],
-                        job["chunk_index"],
-                        job["total_chunks"],
-                        request,
-                    )
-                    payload = {
-                        "model": chat_config.get("model"),
-                        "messages": [
-                            {"role": "system", "content": "你只输出 Markdown cheatsheet 内容；禁止代码围栏；默认紧密转写原文知识点。"},
-                            {"role": "user", "content": prompt},
-                        ],
-                        "stream": True,
-                        "temperature": 0.1,
-                    }
+                    async def stream_llm(prompt_text: str):
+                        payload = {
+                            "model": chat_config.get("model"),
+                            "messages": [
+                                {"role": "system", "content": "你只输出 Markdown cheatsheet 内容；禁止代码围栏；默认紧密转写原文知识点。"},
+                                {"role": "user", "content": prompt_text},
+                            ],
+                            "stream": True,
+                            "temperature": 0.05,
+                        "max_tokens": 8192,
+                        }
+                        async with client.stream("POST", url, headers=headers, json=payload) as response:
+                            if response.status_code >= 400:
+                                error_text = await response.aread()
+                                raise RuntimeError(f"LLM API 错误: {response.status_code}, {error_text.decode('utf-8', errors='replace')[:500]}")
+                            async for line in response.aiter_lines():
+                                if not line or not line.startswith("data:"):
+                                    continue
+                                raw = line[5:].strip()
+                                if raw == "[DONE]":
+                                    break
+                                try:
+                                    data = json.loads(raw)
+                                    delta = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                except Exception:
+                                    delta = ""
+                                if delta:
+                                    yield delta
 
-                    async with client.stream("POST", url, headers=headers, json=payload) as response:
-                        if response.status_code >= 400:
-                            error_text = await response.aread()
-                            yield emit("error", {"message": f"LLM API 错误: {response.status_code}, {error_text.decode('utf-8', errors='replace')[:500]}"})
-                            return
-                        async for line in response.aiter_lines():
-                            if not line or not line.startswith("data:"):
-                                continue
-                            raw = line[5:].strip()
-                            if raw == "[DONE]":
-                                break
-                            try:
-                                data = json.loads(raw)
-                                delta = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                            except Exception:
-                                delta = ""
-                            if delta:
+                    try:
+                        prompt = _build_cheatsheet_chunk_prompt(
+                            job["filename"],
+                            job["text"],
+                            job["chunk_index"],
+                            job["total_chunks"],
+                            request,
+                        )
+                        chunk_parts = []
+                        async for delta in stream_llm(prompt):
+                            chunk_parts.append(delta)
+                            content_parts.append(delta)
+                            yield emit("chunk", {"content": delta})
+                        chunk_output = "".join(chunk_parts)
+                        # Very short outputs are usually accidental summaries. Ask once more for omissions.
+                        if len(chunk_output.strip()) < max(900, len(job["text"]) * 0.45):
+                            backfill_heading = "\n\n### 补漏扩写\n\n"
+                            content_parts.append(backfill_heading)
+                            yield emit("chunk", {"content": backfill_heading})
+                            yield emit("progress", {"message": f"正在补漏扩写 {job['filename']} 第 {job['chunk_index']}/{job['total_chunks']} 段", "current": job_index, "total": total_jobs})
+                            backfill_prompt = _build_cheatsheet_backfill_prompt(job["filename"], job["text"], chunk_output, request)
+                            async for delta in stream_llm(backfill_prompt):
                                 content_parts.append(delta)
                                 yield emit("chunk", {"content": delta})
+                    except RuntimeError as exc:
+                        yield emit("error", {"message": str(exc)})
+                        return
 
             content = "".join(content_parts).strip()
             if not content:
