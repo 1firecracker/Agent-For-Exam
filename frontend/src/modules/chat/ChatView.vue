@@ -327,7 +327,17 @@
                 class="cheatsheet-editor"
                 placeholder="生成后的 cheatsheet 会显示在这里，也可以手动编辑。"
               ></textarea>
-              <div v-else-if="cheatsheetContent" class="cheatsheet-rendered" v-html="renderMarkdown(cheatsheetContent)"></div>
+              <div v-else-if="cheatsheetContent" class="cheatsheet-preview-wrap cheatsheet-generated-wrap">
+                <div class="cheatsheet-preview" :style="cheatsheetPreviewStyle">
+                  <div class="cheatsheet-page cheatsheet-generated-page" :style="cheatsheetPageStyle">
+                    <div
+                      class="cheatsheet-page-content cheatsheet-markdown-content"
+                      :style="cheatsheetContentStyle"
+                      v-html="renderMarkdown(cheatsheetContent)"
+                    ></div>
+                  </div>
+                </div>
+              </div>
               <el-empty v-else description="暂无 cheatsheet，请先点击聊天框上方按钮生成。" :image-size="100" />
               <div class="cheatsheet-edit-toggle">
                 <span>编辑后点击“保存编辑”会写回当前对话。</span>
@@ -413,9 +423,11 @@
         </div>
         <div class="cheatsheet-preview-wrap">
           <div class="cheatsheet-preview" :style="cheatsheetPreviewStyle">
-            <div v-for="page in placeholderPages" :key="page" class="cheatsheet-page" :style="cheatsheetPageStyle">
-              <div class="cheatsheet-page-content" :style="cheatsheetContentStyle">
-                {{ cheatsheetPlaceholderText }}
+            <div v-for="page in placeholderPages" :key="page" class="cheatsheet-page cheatsheet-placeholder-page" :style="cheatsheetPageStyle">
+              <div class="cheatsheet-page-content cheatsheet-placeholder-content" :style="cheatsheetContentStyle">
+                <p v-for="(line, index) in cheatsheetPlaceholderLines" :key="`${page}-${index}`">
+                  {{ line }}
+                </p>
               </div>
             </div>
           </div>
@@ -622,6 +634,16 @@ const cheatsheetPlaceholderText = computed(() => {
   return samples.flatMap(text => Array(50).fill(text)).join(' ')
 })
 
+const cheatsheetPlaceholderLines = computed(() => {
+  const samples = [
+    '这是一条测试语句，用于预览。',
+    'This is a test sentence for preview.',
+    'Это тестовое предложение для предварительного просмотра.',
+    'Ceci est une phrase de test pour l’aperçu.'
+  ]
+  return samples.flatMap(text => Array(50).fill(text))
+})
+
 const placeholderPages = computed(() => [1, 2])
 
 const marginMap = {
@@ -655,7 +677,8 @@ const cheatsheetContentStyle = computed(() => ({
 const cheatsheetPreviewStyle = computed(() => ({
   '--cheatsheet-font-size': `${cheatsheetLayout.value.font_size}px`,
   '--cheatsheet-line-height': cheatsheetLayout.value.line_height,
-  '--cheatsheet-columns': cheatsheetLayout.value.columns
+  '--cheatsheet-columns': cheatsheetLayout.value.columns,
+  '--cheatsheet-preview-scale': cheatsheetLayout.value.orientation === 'landscape' ? 0.72 : 0.9
 }))
 
 watch(completedPdfDocuments, (docs) => {
@@ -682,6 +705,21 @@ const loadCheatsheet = async () => {
     if (res.exists && res.cheatsheet) {
       cheatsheetContent.value = res.cheatsheet.content || ''
       cheatsheetUpdatedAt.value = res.cheatsheet.updated_at || ''
+      if (res.cheatsheet.layout) {
+        cheatsheetLayout.value = {
+          ...cheatsheetLayout.value,
+          ...res.cheatsheet.layout
+        }
+      }
+      if (res.cheatsheet.content_options) {
+        cheatsheetOptions.value = {
+          ...cheatsheetOptions.value,
+          ...res.cheatsheet.content_options
+        }
+      }
+      cheatsheetLanguage.value = res.cheatsheet.language || cheatsheetLanguage.value
+      cheatsheetStyle.value = res.cheatsheet.style || cheatsheetStyle.value
+      cheatsheetPrompt.value = res.cheatsheet.user_prompt || ''
     } else {
       cheatsheetContent.value = ''
       cheatsheetUpdatedAt.value = ''
@@ -2636,9 +2674,22 @@ const formatEnhancedMarkdown = (text) => {
 }
 
 .cheatsheet-rendered {
-  color: var(--text-primary);
-  font-size: 13px;
-  line-height: 1.45;
+  width: 100%;
+  overflow: auto;
+  background: #f3f4f6;
+  border-radius: 10px;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.cheatsheet-rendered .cheatsheet-page {
+  margin: 0 auto;
+  overflow: visible;
+  height: auto;
+}
+
+.cheatsheet-rendered .cheatsheet-page-content {
+  white-space: normal;
 }
 
 .cheatsheet-edit-hint {
@@ -2684,6 +2735,13 @@ const formatEnhancedMarkdown = (text) => {
   flex-direction: column;
   gap: 18px;
   align-items: center;
+  min-width: fit-content;
+}
+
+.cheatsheet-dialog .cheatsheet-preview {
+  transform: scale(0.82);
+  transform-origin: top center;
+  margin-bottom: -12%;
 }
 
 .cheatsheet-page {
@@ -2691,12 +2749,44 @@ const formatEnhancedMarkdown = (text) => {
   background: #fff;
   color: #111827;
   box-shadow: 0 10px 26px rgba(15, 23, 42, 0.16);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .cheatsheet-page-content {
-  white-space: pre-wrap;
   text-align: justify;
+  overflow-wrap: anywhere;
+}
+
+.cheatsheet-placeholder-text {
+  display: block;
+  margin: 0 0 0.45em;
+}
+
+.cheatsheet-page-content :deep(h1),
+.cheatsheet-page-content :deep(h2),
+.cheatsheet-page-content :deep(h3) {
+  margin: 0 0 0.55em;
+  line-height: 1.15;
+}
+
+.cheatsheet-page-content :deep(p),
+.cheatsheet-page-content :deep(ul),
+.cheatsheet-page-content :deep(ol),
+.cheatsheet-page-content :deep(table) {
+  margin-top: 0;
+  margin-bottom: 0.65em;
+}
+
+.cheatsheet-page-content :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.cheatsheet-page-content :deep(th),
+.cheatsheet-page-content :deep(td) {
+  border: 1px solid #d1d5db;
+  padding: 3px 5px;
+  vertical-align: top;
 }
 
 .cheatsheet-document-hint {
