@@ -1,6 +1,7 @@
 """对话管理 API"""
 import asyncio
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -222,6 +223,40 @@ def _build_cheatsheet_backfill_prompt(
 原文片段：
 {chunk_text}
 """
+
+
+def _build_faithful_transcription(filename: str, text: str) -> str:
+    pages: List[Dict[str, Any]] = []
+    current_page: Optional[Dict[str, Any]] = None
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        marker = re.match(r"^\[FILE:([^\]]+)\]\[PAGE:(\d+)\]$", line)
+        if marker:
+            current_page = {
+                "file_id": marker.group(1),
+                "page": marker.group(2),
+                "lines": [],
+            }
+            pages.append(current_page)
+            continue
+        if current_page is None:
+            current_page = {"file_id": "", "page": "?", "lines": []}
+            pages.append(current_page)
+        current_page["lines"].append(line)
+
+    output = [f"# {filename} Cheatsheet", ""]
+    for page in pages:
+        page_no = page["page"]
+        file_id = page["file_id"]
+        output.append(f"## Page {page_no} [FILE:{file_id}][PAGE:{page_no}]")
+        output.append("")
+        for line in page["lines"]:
+            output.append(line)
+        output.append("")
+    return "\n".join(output).strip()
 
 
 @router.post("", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
@@ -770,6 +805,34 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
 
             layout = request.layout.model_dump()
             options = request.content_options.model_dump()
+            faithful_mode = request.style in ("faithful", "auto")
+            if faithful_mode:
+                yield emit("progress", {"message": "正在按原文逐页转写 cheatsheet", "current": 1, "total": 1})
+                content_parts = []
+                for doc, file_path in selected_docs:
+                    text = (doc_service.document_parser.extract_text(str(file_path), file_id=doc["file_id"]) or "").strip()
+                    faithful_content = _build_faithful_transcription(doc["filename"], text)
+                    content_parts.append(faithful_content)
+                    yield emit("chunk", {"content": faithful_content})
+
+                content = "\n\n".join(content_parts).strip()
+                saved = _save_cheatsheet(
+                    conversation_id,
+                    {
+                        "status": "completed",
+                        "content": content,
+                        "layout": layout,
+                        "content_options": options,
+                        "language": request.language,
+                        "style": request.style,
+                        "user_prompt": request.user_prompt,
+                        "document_ids": request.document_ids,
+                        "documents": [{"file_id": doc["file_id"], "filename": doc["filename"]} for doc, _ in selected_docs],
+                    },
+                )
+                yield emit("done", {"cheatsheet": saved})
+                return
+
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
             url = f"{chat_config.get('host', '').rstrip('/')}/chat/completions"
             content_parts = []
