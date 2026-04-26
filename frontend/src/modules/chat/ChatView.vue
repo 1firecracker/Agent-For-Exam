@@ -177,6 +177,18 @@
 
       <!-- 底部输入区 -->
       <div class="input-area-wrapper">
+        <div v-if="subjectId" class="chat-action-bar">
+          <el-button
+            type="primary"
+            plain
+            size="small"
+            :disabled="!canOpenCheatsheet"
+            @click="openCheatsheetDialog"
+          >
+            生成速查表
+          </el-button>
+          <span class="chat-action-hint">{{ cheatsheetButtonHint }}</span>
+        </div>
         <div class="input-box">
           <!-- 输入框内部的文档附件卡片 -->
           <div v-if="composerAttachments.length" class="composer-attachments">
@@ -291,9 +303,169 @@
                <MindMapViewer v-if="conversationId" />
             </div>
           </el-tab-pane>
+
+          <!-- 普通对话：Cheatsheet Tab -->
+          <el-tab-pane v-if="!isExamAnalysisConversation" label="Cheatsheet" name="cheatsheet">
+            <div class="tab-content-wrapper cheatsheet-panel">
+              <div class="cheatsheet-panel-header">
+                <div>
+                  <h3>Cheatsheet</h3>
+                  <p v-if="cheatsheetUpdatedAt">Updated at {{ cheatsheetUpdatedAt }}</p>
+                </div>
+                <div class="cheatsheet-panel-actions">
+                  <el-button size="small" @click="cheatsheetEditMode = !cheatsheetEditMode" :disabled="!cheatsheetContent">
+                    {{ cheatsheetEditMode ? '切换到预览模式' : '打开编辑模式' }}
+                  </el-button>
+                  <el-button size="small" @click="copyCheatsheet" :disabled="!cheatsheetContent">复制 Markdown</el-button>
+                  <el-button size="small" @click="saveEditedCheatsheet" :disabled="!cheatsheetContent || cheatsheetSaving">保存编辑</el-button>
+                  <el-button size="small" type="primary" @click="printCheatsheet" :disabled="!cheatsheetContent">打印 PDF</el-button>
+                </div>
+              </div>
+              <textarea
+                v-if="cheatsheetEditMode"
+                v-model="cheatsheetContent"
+                class="cheatsheet-editor"
+                placeholder="生成后的 cheatsheet 会显示在这里，也可以手动编辑。"
+              ></textarea>
+              <div v-else-if="cheatsheetContent" class="cheatsheet-preview-wrap cheatsheet-generated-wrap">
+                <div class="cheatsheet-preview" :style="cheatsheetPreviewStyle">
+                  <div
+                    v-for="(pageContent, pageIndex) in paginatedCheatsheetPages"
+                    :key="pageIndex"
+                    class="cheatsheet-page cheatsheet-generated-page"
+                    :style="cheatsheetPageStyle"
+                  >
+                    <div
+                      class="cheatsheet-page-content cheatsheet-markdown-content"
+                      :style="cheatsheetContentStyle"
+                      v-html="renderMarkdown(pageContent)"
+                    ></div>
+                    <div class="cheatsheet-page-number">Page {{ pageIndex + 1 }}</div>
+                  </div>
+                </div>
+              </div>
+              <el-empty v-else description="暂无 cheatsheet，请先点击聊天框上方按钮生成。" :image-size="100" />
+              <div class="cheatsheet-edit-toggle">
+                <span>编辑后点击“保存编辑”会写回当前对话。</span>
+              </div>
+            </div>
+          </el-tab-pane>
         </el-tabs>
       </div>
     </div>
+
+    <el-dialog
+      v-model="cheatsheetDialogVisible"
+      title="Cheatsheet Preview"
+      width="92%"
+      top="4vh"
+      class="cheatsheet-dialog"
+      :close-on-click-modal="false"
+    >
+      <div class="cheatsheet-dialog-body">
+        <div class="cheatsheet-config">
+          <h3>排版设置</h3>
+          <label>纸张类型</label>
+          <el-select v-model="cheatsheetLayout.paper_type" size="small">
+            <el-option label="A4" value="A4" />
+            <el-option label="Letter" value="Letter" />
+            <el-option label="A5" value="A5" />
+          </el-select>
+          <label>方向</label>
+          <el-radio-group v-model="cheatsheetLayout.orientation" size="small">
+            <el-radio-button label="portrait">Portrait</el-radio-button>
+            <el-radio-button label="landscape">Landscape</el-radio-button>
+          </el-radio-group>
+          <label>字体大小：{{ cheatsheetLayout.font_size }}px</label>
+          <el-slider v-model="cheatsheetLayout.font_size" :min="8" :max="14" :step="1" />
+          <label>行高：{{ cheatsheetLayout.line_height }}</label>
+          <el-slider v-model="cheatsheetLayout.line_height" :min="1" :max="1.5" :step="0.1" />
+          <label>页边距</label>
+          <el-select v-model="cheatsheetLayout.margin" size="small">
+            <el-option label="Narrow" value="narrow" />
+            <el-option label="Normal" value="normal" />
+            <el-option label="Wide" value="wide" />
+          </el-select>
+          <label>分栏</label>
+          <el-select v-model="cheatsheetLayout.columns" size="small">
+            <el-option label="1" :value="1" />
+            <el-option label="2" :value="2" />
+            <el-option label="3" :value="3" />
+            <el-option label="4" :value="4" />
+          </el-select>
+          <label>语言偏好</label>
+          <el-select v-model="cheatsheetLanguage" size="small">
+            <el-option label="自动" value="auto" />
+            <el-option label="中文" value="zh" />
+            <el-option label="English" value="en" />
+            <el-option label="Bilingual" value="bilingual" />
+          </el-select>
+
+          <h3>内容设置</h3>
+          <label>内容密度</label>
+          <el-select v-model="cheatsheetOptions.density" size="small">
+            <el-option label="简洁" value="concise" />
+            <el-option label="标准" value="standard" />
+            <el-option label="高密度" value="dense" />
+          </el-select>
+          <label>生成风格</label>
+          <el-select v-model="cheatsheetStyle" size="small">
+            <el-option label="完全尊重原文紧密转写" value="faithful" />
+            <el-option label="精简压缩" value="concise" />
+            <el-option label="自动分析要点" value="auto" />
+          </el-select>
+          <label>自定义提示词</label>
+          <el-input
+            v-model="cheatsheetPrompt"
+            type="textarea"
+            :rows="4"
+            placeholder="例如：更偏考试复习，压缩成可打印的高密度要点。"
+          />
+        </div>
+        <div class="cheatsheet-preview-wrap">
+          <div class="cheatsheet-preview" :style="cheatsheetPreviewStyle">
+            <div v-for="page in placeholderPages" :key="page" class="cheatsheet-page cheatsheet-placeholder-page" :style="cheatsheetPageStyle">
+              <div class="cheatsheet-page-content cheatsheet-placeholder-content" :style="cheatsheetContentStyle">
+                {{ cheatsheetPlaceholderText }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="cheatsheetDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!completedPdfDocuments.length" @click="openCheatsheetDocumentDialog">
+          Generate from Current Subject Documents
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="cheatsheetDocumentDialogVisible"
+      title="选择 PDF 讲义范围"
+      width="560px"
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <p class="cheatsheet-document-hint">默认全选当前 subject 中已处理完成的 PDF 讲义。</p>
+      <p v-if="cheatsheetGenerationStatus" class="cheatsheet-generation-status">{{ cheatsheetGenerationStatus }}</p>
+      <el-checkbox-group v-model="selectedCheatsheetDocumentIds" class="cheatsheet-document-list">
+        <el-checkbox
+          v-for="doc in completedPdfDocuments"
+          :key="doc.file_id"
+          :label="doc.file_id"
+        >
+          {{ doc.filename }}
+        </el-checkbox>
+      </el-checkbox-group>
+      <el-empty v-if="!completedPdfDocuments.length" description="暂无已完成处理的 PDF 讲义" :image-size="80" />
+      <template #footer>
+        <el-button @click="cheatsheetDocumentDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="cheatsheetGenerating" :disabled="!selectedCheatsheetDocumentIds.length" @click="generateCheatsheet">
+          开始生成
+        </el-button>
+      </template>
+    </el-dialog>
 
     <!-- 知识图谱弹窗 -->
     <el-dialog
@@ -314,6 +486,7 @@
 <script setup>
 import { ref, nextTick, onMounted, watch, computed, provide } from 'vue'
 import { useRoute } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { Position, ArrowRight, ArrowLeft, Share, Edit, Close, Check, Loading } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import katex from 'katex'
@@ -390,6 +563,35 @@ const messages = ref([])
 // 输入框上方的文档附件（解析数据 / 图片）
 const composerAttachments = ref([])
 
+const cheatsheetDialogVisible = ref(false)
+const cheatsheetDocumentDialogVisible = ref(false)
+const cheatsheetGenerating = ref(false)
+const cheatsheetSaving = ref(false)
+const cheatsheetEditMode = ref(false)
+const cheatsheetContent = ref('')
+const cheatsheetUpdatedAt = ref('')
+const cheatsheetGenerationStatus = ref('')
+const selectedCheatsheetDocumentIds = ref([])
+const cheatsheetPrompt = ref('')
+const cheatsheetLanguage = ref('auto')
+const cheatsheetStyle = ref('auto')
+const cheatsheetLayout = ref({
+  paper_type: 'A4',
+  orientation: 'portrait',
+  font_size: 10,
+  line_height: 1.2,
+  margin: 'narrow',
+  columns: 2
+})
+const cheatsheetOptions = ref({
+  density: 'standard',
+  include_formulas: true,
+  include_definitions: true,
+  include_algorithms: true,
+  include_examples: true,
+  include_page_refs: true
+})
+
 // 当前选中的文档ID（用于 PPT 查看器）
 const selectedDocumentId = ref(null)
 
@@ -408,6 +610,276 @@ const currentDocuments = computed(() => {
   }
   return []
 })
+
+const completedPdfDocuments = computed(() =>
+  currentDocuments.value.filter(doc => doc.file_extension === 'pdf' && doc.status === 'completed')
+)
+
+const canOpenCheatsheet = computed(() => Boolean(subjectId.value) && currentDocuments.value.length > 0)
+
+const cheatsheetButtonHint = computed(() => {
+  if (!currentDocuments.value.length) return '请先上传讲义文档'
+  if (!completedPdfDocuments.value.length) return 'MVP 仅支持已处理完成的 PDF 讲义'
+  return `可用 PDF 讲义 ${completedPdfDocuments.value.length} 份`
+})
+
+const cheatsheetPlaceholderText = computed(() => {
+  const samples = [
+    '这是一条测试语句，用于预览。',
+    'This is a test sentence for preview.',
+    'Это тестовое предложение для предварительного просмотра.',
+    'Ceci est une phrase de test pour l’aperçu.'
+  ]
+  return samples.flatMap(text => Array(50).fill(text)).join(' ')
+})
+
+const placeholderPages = computed(() => [1, 2])
+
+const marginMap = {
+  narrow: '8mm',
+  normal: '14mm',
+  wide: '20mm'
+}
+
+const paperSizes = {
+  A4: { portrait: ['210mm', '297mm'], landscape: ['297mm', '210mm'] },
+  Letter: { portrait: ['216mm', '279mm'], landscape: ['279mm', '216mm'] },
+  A5: { portrait: ['148mm', '210mm'], landscape: ['210mm', '148mm'] }
+}
+
+const cheatsheetPageStyle = computed(() => {
+  const [width, minHeight] = paperSizes[cheatsheetLayout.value.paper_type]?.[cheatsheetLayout.value.orientation] || paperSizes.A4.portrait
+  return {
+    width,
+    minHeight,
+    padding: marginMap[cheatsheetLayout.value.margin] || marginMap.narrow
+  }
+})
+
+const cheatsheetContentStyle = computed(() => ({
+  fontSize: `${cheatsheetLayout.value.font_size}px`,
+  lineHeight: cheatsheetLayout.value.line_height,
+  columnCount: cheatsheetLayout.value.columns,
+  columnGap: '12px'
+}))
+
+const cheatsheetPreviewStyle = computed(() => ({
+  '--cheatsheet-font-size': `${cheatsheetLayout.value.font_size}px`,
+  '--cheatsheet-line-height': cheatsheetLayout.value.line_height,
+  '--cheatsheet-columns': cheatsheetLayout.value.columns,
+  '--cheatsheet-preview-scale': cheatsheetLayout.value.orientation === 'landscape' ? 0.72 : 0.9,
+  '--cheatsheet-result-scale': cheatsheetLayout.value.orientation === 'landscape' ? 0.55 : 0.68
+}))
+
+watch(completedPdfDocuments, (docs) => {
+  selectedCheatsheetDocumentIds.value = docs.map(doc => doc.file_id)
+}, { immediate: true })
+
+const stripMarkdownFence = (text) => {
+  const content = (text || '').trim()
+  const match = content.match(/^```(?:markdown|md)?\s*([\s\S]*?)\s*```$/i)
+  return match ? match[1].trim() : content
+}
+
+const renderMarkdown = (text) => formatEnhancedMarkdown(stripMarkdownFence(text))
+
+const splitMarkdownBlocks = (text) => {
+  const normalized = stripMarkdownFence(text)
+  if (!normalized) return []
+  const blocks = []
+  let current = []
+  for (const line of normalized.split('\n')) {
+    const startsNewBlock = /^(#{1,6}\s+|\d+\.\s+|[-*]\s+)/.test(line.trim())
+    if (startsNewBlock && current.length) {
+      blocks.push(current.join('\n').trim())
+      current = []
+    }
+    current.push(line)
+    if (!line.trim() && current.some(item => item.trim())) {
+      blocks.push(current.join('\n').trim())
+      current = []
+    }
+  }
+  if (current.some(item => item.trim())) {
+    blocks.push(current.join('\n').trim())
+  }
+  return blocks.filter(Boolean)
+}
+
+const estimateBlockWeight = (block) => {
+  const lines = block.split('\n').length
+  const chars = block.length
+  const headingBonus = /^#{1,6}\s+/.test(block.trim()) ? 2 : 0
+  const tableBonus = block.includes('|') ? 3 : 0
+  return Math.max(1, Math.ceil(chars / 95) + lines + headingBonus + tableBonus)
+}
+
+const cheatsheetPageCapacity = computed(() => {
+  const base = cheatsheetLayout.value.orientation === 'landscape' ? 26 : 42
+  const fontFactor = 10 / cheatsheetLayout.value.font_size
+  const lineFactor = 1.2 / cheatsheetLayout.value.line_height
+  return Math.max(12, Math.floor(base * fontFactor * lineFactor))
+})
+
+const paginatedCheatsheetPages = computed(() => {
+  const blocks = splitMarkdownBlocks(cheatsheetContent.value)
+  if (!blocks.length) return []
+  const pages = []
+  let current = []
+  let weight = 0
+  for (const block of blocks) {
+    const blockWeight = estimateBlockWeight(block)
+    if (current.length && weight + blockWeight > cheatsheetPageCapacity.value) {
+      pages.push(current.join('\n\n'))
+      current = []
+      weight = 0
+    }
+    current.push(block)
+    weight += blockWeight
+  }
+  if (current.length) {
+    pages.push(current.join('\n\n'))
+  }
+  return pages
+})
+
+const openCheatsheetDialog = () => {
+  if (!canOpenCheatsheet.value) return
+  cheatsheetDialogVisible.value = true
+}
+
+const openCheatsheetDocumentDialog = () => {
+  selectedCheatsheetDocumentIds.value = completedPdfDocuments.value.map(doc => doc.file_id)
+  cheatsheetDialogVisible.value = false
+  cheatsheetDocumentDialogVisible.value = true
+}
+
+const loadCheatsheet = async () => {
+  if (!conversationId.value) return
+  try {
+    const res = await api.get(`/api/conversations/${conversationId.value}/cheatsheet`)
+    if (res.exists && res.cheatsheet) {
+      cheatsheetContent.value = res.cheatsheet.content || ''
+      cheatsheetUpdatedAt.value = res.cheatsheet.updated_at || ''
+      if (res.cheatsheet.layout) {
+        cheatsheetLayout.value = {
+          ...cheatsheetLayout.value,
+          ...res.cheatsheet.layout
+        }
+      }
+      if (res.cheatsheet.content_options) {
+        cheatsheetOptions.value = {
+          ...cheatsheetOptions.value,
+          ...res.cheatsheet.content_options
+        }
+      }
+      cheatsheetLanguage.value = res.cheatsheet.language || cheatsheetLanguage.value
+      cheatsheetStyle.value = res.cheatsheet.style || cheatsheetStyle.value
+      cheatsheetPrompt.value = res.cheatsheet.user_prompt || ''
+    } else {
+      cheatsheetContent.value = ''
+      cheatsheetUpdatedAt.value = ''
+    }
+  } catch (error) {
+    console.error('Failed to load cheatsheet:', error)
+  }
+}
+
+const generateCheatsheet = async () => {
+  if (!conversationId.value || !subjectId.value || !selectedCheatsheetDocumentIds.value.length) return
+  cheatsheetGenerating.value = true
+  cheatsheetContent.value = ''
+  cheatsheetGenerationStatus.value = '准备生成 cheatsheet...'
+  activeTab.value = 'cheatsheet'
+
+  try {
+    const response = await fetch(`${BASE_URL}/api/conversations/${conversationId.value}/cheatsheet/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subject_id: subjectId.value,
+        document_ids: selectedCheatsheetDocumentIds.value,
+        layout: cheatsheetLayout.value,
+        content_options: cheatsheetOptions.value,
+        language: cheatsheetLanguage.value,
+        style: cheatsheetStyle.value,
+        user_prompt: cheatsheetPrompt.value || null
+      })
+    })
+
+    if (!response.ok) throw new Error(`Cheatsheet API error: ${response.status}`)
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const events = buffer.split('\n\n')
+      buffer = events.pop() || ''
+
+      for (const eventText of events) {
+        const dataLine = eventText.split('\n').find(line => line.startsWith('data:'))
+        if (!dataLine) continue
+        const data = JSON.parse(dataLine.slice(5).trim())
+        if (data.event === 'progress') {
+          cheatsheetGenerationStatus.value = data.message || '生成中...'
+        } else if (data.event === 'warning') {
+          cheatsheetGenerationStatus.value = data.message || '生成中有警告'
+        } else if (data.event === 'chunk') {
+          cheatsheetContent.value += data.content || ''
+        } else if (data.event === 'done') {
+          cheatsheetUpdatedAt.value = data.cheatsheet?.updated_at || ''
+          cheatsheetGenerationStatus.value = 'Cheatsheet 生成完成'
+        } else if (data.event === 'error') {
+          throw new Error(data.message || '生成失败')
+        }
+      }
+    }
+
+    cheatsheetDialogVisible.value = false
+    cheatsheetDocumentDialogVisible.value = false
+    ElMessage.success('Cheatsheet 生成完成')
+  } catch (error) {
+    console.error('Generate cheatsheet failed:', error)
+    cheatsheetGenerationStatus.value = error.message || 'Cheatsheet 生成失败'
+    ElMessage.error(error.message || 'Cheatsheet 生成失败')
+  } finally {
+    cheatsheetGenerating.value = false
+  }
+}
+
+const saveEditedCheatsheet = async () => {
+  if (!conversationId.value || !cheatsheetContent.value) return
+  cheatsheetSaving.value = true
+  try {
+    const res = await api.patch(`/api/conversations/${conversationId.value}/cheatsheet`, {
+      content: cheatsheetContent.value,
+      layout: cheatsheetLayout.value,
+      content_options: cheatsheetOptions.value,
+      language: cheatsheetLanguage.value,
+      style: cheatsheetStyle.value,
+      user_prompt: cheatsheetPrompt.value || null
+    })
+    cheatsheetUpdatedAt.value = res.cheatsheet?.updated_at || ''
+    ElMessage.success('Cheatsheet 已保存')
+  } finally {
+    cheatsheetSaving.value = false
+  }
+}
+
+const copyCheatsheet = async () => {
+  if (!cheatsheetContent.value) return
+  await navigator.clipboard.writeText(cheatsheetContent.value)
+  ElMessage.success('Markdown 已复制')
+}
+
+const printCheatsheet = () => {
+  activeTab.value = 'cheatsheet'
+  nextTick(() => window.print())
+}
 
 // 监听文档列表变化，自动选择按字符排序的第一个文档
 watch(currentDocuments, (docs) => {
@@ -1253,8 +1725,9 @@ const initializeConversation = async () => {
   })()
 
   const msgPromise = loadMessages()
+  const cheatsheetPromise = loadCheatsheet()
 
-  await Promise.all([docPromise, msgPromise])
+  await Promise.all([docPromise, msgPromise, cheatsheetPromise])
 }
 
 onMounted(async () => {
@@ -1982,6 +2455,18 @@ const formatEnhancedMarkdown = (text) => {
   border-radius: 0 0 12px 12px;
 }
 
+.chat-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.chat-action-hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .input-box {
   background-color: var(--bg-app);
   border: 1px solid var(--border-subtle);
@@ -2198,6 +2683,232 @@ const formatEnhancedMarkdown = (text) => {
   gap: 12px;
   color: #909399;
   font-size: 14px;
+}
+
+.cheatsheet-panel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+}
+
+.cheatsheet-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cheatsheet-panel-header h3 {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.cheatsheet-panel-header p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.cheatsheet-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.cheatsheet-editor {
+  min-height: 520px;
+  resize: vertical;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.cheatsheet-rendered {
+  width: 100%;
+  overflow: auto;
+  background: #f3f4f6;
+  border-radius: 10px;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.cheatsheet-rendered .cheatsheet-page {
+  margin: 0 auto;
+  overflow: visible;
+  height: auto;
+}
+
+.cheatsheet-rendered .cheatsheet-page-content {
+  white-space: normal;
+}
+
+.cheatsheet-edit-hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+  width: 100%;
+  text-align: right;
+}
+
+.cheatsheet-dialog-body {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 18px;
+  height: 74vh;
+}
+
+.cheatsheet-config {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 8px;
+}
+
+.cheatsheet-config h3 {
+  margin: 8px 0 2px;
+}
+
+.cheatsheet-config label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.cheatsheet-preview-wrap {
+  overflow: auto;
+  background: #f3f4f6;
+  border-radius: 10px;
+  padding: 20px;
+}
+
+.cheatsheet-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  align-items: center;
+  min-width: fit-content;
+}
+
+.cheatsheet-generated-wrap .cheatsheet-preview {
+  transform: scale(var(--cheatsheet-result-scale));
+  transform-origin: top center;
+  margin-bottom: calc((var(--cheatsheet-result-scale) - 1) * 100%);
+}
+
+.cheatsheet-dialog .cheatsheet-preview {
+  transform: scale(0.82);
+  transform-origin: top center;
+  margin-bottom: -12%;
+}
+
+.cheatsheet-generated-wrap .cheatsheet-preview {
+  transform: scale(0.72);
+  transform-origin: top center;
+  margin-bottom: -22%;
+}
+
+.cheatsheet-page {
+  box-sizing: border-box;
+  background: #fff;
+  color: #111827;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.16);
+  overflow: visible;
+}
+
+.cheatsheet-page-content {
+  text-align: justify;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.cheatsheet-page-number {
+  margin-top: 8px;
+  color: #6b7280;
+  font-size: 10px;
+  text-align: center;
+}
+
+.cheatsheet-placeholder-text {
+  display: block;
+  margin: 0 0 0.45em;
+}
+
+.cheatsheet-page-content :deep(h1),
+.cheatsheet-page-content :deep(h2),
+.cheatsheet-page-content :deep(h3) {
+  margin: 0 0 0.55em;
+  line-height: 1.15;
+}
+
+.cheatsheet-page-content :deep(p),
+.cheatsheet-page-content :deep(ul),
+.cheatsheet-page-content :deep(ol),
+.cheatsheet-page-content :deep(table) {
+  margin-top: 0;
+  margin-bottom: 0.65em;
+}
+
+.cheatsheet-page-content :deep(table) {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.cheatsheet-page-content :deep(th),
+.cheatsheet-page-content :deep(td) {
+  border: 1px solid #d1d5db;
+  padding: 3px 5px;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.cheatsheet-page-content :deep(pre) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.cheatsheet-page-content :deep(code) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cheatsheet-document-hint {
+  margin-top: 0;
+  color: var(--text-secondary);
+}
+
+.cheatsheet-document-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .cheatsheet-panel,
+  .cheatsheet-panel * {
+    visibility: visible;
+  }
+  .cheatsheet-panel {
+    position: absolute;
+    inset: 0;
+    overflow: visible;
+  }
+  .cheatsheet-panel-header,
+  .cheatsheet-edit-toggle {
+    display: none;
+  }
 }
 
 /* Markdown 和 LaTeX 渲染样式 */

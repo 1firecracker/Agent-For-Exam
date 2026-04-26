@@ -1,13 +1,19 @@
 """对话管理 API"""
 import asyncio
 import json
+import re
 from datetime import datetime
-from typing import List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+import app.config as config
+from app.services.config_service import config_service
 from app.services.conversation_service import ConversationService
+from app.services.document_service import DocumentService
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -37,6 +43,248 @@ class ConversationResponse(BaseModel):
 class ConversationListResponse(BaseModel):
     conversations: List[ConversationResponse]
     total: int
+
+
+class CheatsheetLayout(BaseModel):
+    paper_type: str = "A4"
+    orientation: str = "portrait"
+    font_size: int = Field(default=10, ge=8, le=14)
+    line_height: float = Field(default=1.2, ge=1.0, le=1.5)
+    margin: str = "narrow"
+    columns: int = Field(default=2, ge=1, le=4)
+
+
+class CheatsheetContentOptions(BaseModel):
+    density: str = "standard"
+    include_formulas: bool = True
+    include_definitions: bool = True
+    include_algorithms: bool = True
+    include_examples: bool = True
+    include_page_refs: bool = True
+
+
+class CheatsheetGenerateRequest(BaseModel):
+    subject_id: str
+    document_ids: List[str]
+    layout: CheatsheetLayout = Field(default_factory=CheatsheetLayout)
+    content_options: CheatsheetContentOptions = Field(default_factory=CheatsheetContentOptions)
+    language: str = "auto"
+    style: str = "auto"
+    user_prompt: Optional[str] = None
+
+
+class CheatsheetUpdateRequest(BaseModel):
+    content: str
+    layout: Optional[CheatsheetLayout] = None
+    content_options: Optional[CheatsheetContentOptions] = None
+    language: Optional[str] = None
+    style: Optional[str] = None
+    user_prompt: Optional[str] = None
+
+
+def _cheatsheet_file(conversation_id: str) -> Path:
+    return Path(config.settings.conversations_dir) / conversation_id / "cheatsheet.json"
+
+
+def _load_cheatsheet(conversation_id: str) -> Optional[Dict[str, Any]]:
+    file_path = _cheatsheet_file(conversation_id)
+    if not file_path.exists():
+        return None
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _save_cheatsheet(conversation_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    file_path = _cheatsheet_file(conversation_id)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    now = datetime.utcnow().isoformat() + "Z"
+    existing = _load_cheatsheet(conversation_id) or {}
+    payload = {
+        **existing,
+        **data,
+        "conversation_id": conversation_id,
+        "updated_at": now,
+        "created_at": existing.get("created_at", now),
+    }
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return payload
+
+
+def _delete_cheatsheet(conversation_id: str) -> bool:
+    file_path = _cheatsheet_file(conversation_id)
+    if not file_path.exists():
+        return False
+    file_path.unlink()
+    return True
+
+
+def _json_event(event: str, data: Dict[str, Any]) -> str:
+    return f"data: {json.dumps({'event': event, **data}, ensure_ascii=False)}\n\n"
+
+
+def _chunk_text(text: str, max_chars: int = 1800) -> List[str]:
+    """Split lecture text into stable chunks so the LLM covers more source material."""
+    chunks = []
+    current = []
+    current_len = 0
+    for block in text.split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        block_len = len(block)
+        if current and current_len + block_len > max_chars:
+            chunks.append("\n\n".join(current))
+            current = []
+            current_len = 0
+        if block_len > max_chars:
+            for start in range(0, block_len, max_chars):
+                chunks.append(block[start:start + max_chars])
+            continue
+        current.append(block)
+        current_len += block_len
+    if current:
+        chunks.append("\n\n".join(current))
+    return chunks
+
+
+def _build_cheatsheet_chunk_prompt(
+    filename: str,
+    chunk_text: str,
+    chunk_index: int,
+    total_chunks: int,
+    request: CheatsheetGenerateRequest,
+) -> str:
+    options = request.content_options
+    layout = request.layout
+    style = request.style if request.style and request.style != "auto" else "faithful"
+    custom_prompt = request.user_prompt.strip() if request.user_prompt else "尽量把原文知识点紧密转写到 cheatsheet 中，少做抽象总结。"
+    min_items = max(10, min(36, len(chunk_text) // 90))
+    return f"""你是考试复习 cheatsheet 编写助手。请严格基于当前讲义片段生成 Markdown cheatsheet，不要编造讲义外信息。
+
+用户提示词：
+{custom_prompt}
+
+生成风格：{style}
+语言偏好：{request.language}（auto 表示默认使用讲义主要语言）
+内容密度：{options.density}
+排版约束：纸张 {layout.paper_type}，方向 {layout.orientation}，字号 {layout.font_size}px，{layout.columns} 栏。
+内容选项：
+- 包含公式：{options.include_formulas}
+- 包含定义：{options.include_definitions}
+- 包含算法步骤：{options.include_algorithms}
+- 包含例题提示：{options.include_examples}
+- 包含页码引用：{options.include_page_refs}
+
+输出要求：
+- 只输出 Markdown 内容，绝对不要使用 ``` 或 ```markdown 代码围栏。
+- 默认采用“完全尊重原文紧密转写”：这是逐行/逐句提取式整理，不是摘要。必须为输入片段里的每个有效句子、项目符号、概念、定义、步骤、术语、例子、约束、对比和结论生成对应内容，而不是只总结 3-5 条。
+- 只能转写、压缩、重排原文明确出现的内容；禁止补充原文没有出现的例子、算法、术语、应用场景或背景知识。
+- 保留原文层级、顺序和术语；可压缩措辞，但不要丢关键限定条件。
+- 当前片段至少输出 {min_items} 条有效要点；如果原文有效要点少于该数量，按实际数量输出。若原文存在重复页，也要至少完整写出一页的全部有效内容。
+- 对列表/流程/表格型原文，逐项保留；不要合并成一句泛泛概括。
+- 不要用 “all concepts appear identically / 内容重复” 这类一句话替代重复页或重复项目；如果多页重复出现，应保留首次内容并标注覆盖页码。
+- 优先短句、列表、表格和公式块，适配高密度打印。
+- 如能判断页码，请保留文件名和页码引用。
+- 如果讲义内容不足以支持某项内容，请省略该项，不要补写；宁可少写，也不要添加外部知识。
+
+当前文档：{filename}
+当前片段：{chunk_index}/{total_chunks}
+
+讲义片段内容：
+{chunk_text}
+"""
+
+
+def _build_cheatsheet_backfill_prompt(
+    filename: str,
+    chunk_text: str,
+    existing_output: str,
+    request: CheatsheetGenerateRequest,
+) -> str:
+    custom_prompt = request.user_prompt.strip() if request.user_prompt else "尽量完整保留原文有效内容。"
+    return f"""上一轮 cheatsheet 输出明显过短。请对同一讲义片段做“补漏扩写”，只补充上一轮遗漏的有效内容。
+
+硬性要求：
+- 只输出 Markdown 片段；不要代码围栏。
+- 逐条检查原文每一行/每个项目，只补充上一轮遗漏的原文显式内容。
+- 不要重复上一轮已有内容；不要抽象总结；不要添加原文未出现的例子、算法、术语、应用场景或背景知识。
+- 如果没有遗漏的原文显式内容，只输出：无补充。
+- 用户提示词：{custom_prompt}
+
+文档：{filename}
+
+上一轮已有输出：
+{existing_output}
+
+原文片段：
+{chunk_text}
+"""
+
+
+def _extract_pdf_pages(text: str) -> List[Dict[str, Any]]:
+    pages: List[Dict[str, Any]] = []
+    current_page: Optional[Dict[str, Any]] = None
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        marker = re.match(r"^\[FILE:([^\]]+)\]\[PAGE:(\d+)\]$", line)
+        if marker:
+            current_page = {
+                "file_id": marker.group(1),
+                "page": marker.group(2),
+                "lines": [],
+            }
+            pages.append(current_page)
+            continue
+        if current_page is None:
+            current_page = {"file_id": "", "page": "?", "lines": []}
+            pages.append(current_page)
+        current_page["lines"].append(line)
+
+    return pages
+
+
+def _build_faithful_page_prompt(filename: str, page: Dict[str, Any], request: CheatsheetGenerateRequest) -> str:
+    custom_prompt = request.user_prompt.strip() if request.user_prompt else "完整保留所有有效内容，逐页逐条转写原文，不要摘要，不要合并。"
+    page_text = "\n".join(page.get("lines", []))
+    return f"""你是讲义 cheatsheet 的逐页转写助手。请把当前 PDF 页面转写成 Markdown cheatsheet。
+
+硬性要求：
+- 必须使用 LLM 进行轻量整理，但不能摘要、不能合并、不能省略。
+- 保留当前页面所有有效内容，尤其是编号列表、项目符号、定义、术语、公式、步骤、例子、提示。
+- 如果原文有 12 个编号项，输出也必须有 12 个对应编号项。
+- 重复内容也要保留，不要写“同上 / identical / duplicates / not repeated”。
+- 只能转写原文明确出现的内容，禁止补充外部知识。
+- 只输出 Markdown，不要代码围栏。
+- 用户要求：{custom_prompt}
+
+文档：{filename}
+页码：[FILE:{page.get("file_id", "")}][PAGE:{page.get("page", "?")}]
+
+原文页面内容：
+{page_text}
+"""
+
+
+def _build_faithful_missing_lines(page: Dict[str, Any], generated: str) -> str:
+    source_numbered = [line for line in page.get("lines", []) if re.match(r"^\d+\.\s+", line)]
+    generated_numbered_count = len(re.findall(r"^\s*\d+\.\s+", generated, flags=re.MULTILINE))
+    if generated_numbered_count >= len(source_numbered):
+        return ""
+
+    missing = source_numbered[generated_numbered_count:]
+    if not missing:
+        return ""
+
+    output = ["", "### 原文逐条补全", ""]
+    output.extend(missing)
+    return "\n".join(output)
 
 
 @router.post("", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
@@ -481,4 +729,276 @@ async def reset_messages(conversation_id: str, request: MessageResetRequest):
         )
     
     return {"status": "success"}
+
+
+@router.get("/{conversation_id}/cheatsheet")
+async def get_cheatsheet(conversation_id: str):
+    service = ConversationService()
+    if not service.get_conversation(conversation_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="对话不存在")
+    data = _load_cheatsheet(conversation_id)
+    return {"exists": data is not None, "cheatsheet": data}
+
+
+@router.patch("/{conversation_id}/cheatsheet")
+async def update_cheatsheet(conversation_id: str, request: CheatsheetUpdateRequest):
+    service = ConversationService()
+    if not service.get_conversation(conversation_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="对话不存在")
+    data = _save_cheatsheet(
+        conversation_id,
+        {
+            "content": request.content,
+            "layout": request.layout.model_dump() if request.layout else None,
+            "content_options": request.content_options.model_dump() if request.content_options else None,
+            "language": request.language,
+            "style": request.style,
+            "user_prompt": request.user_prompt,
+            "status": "saved",
+        },
+    )
+    return {"status": "success", "cheatsheet": data}
+
+
+@router.delete("/{conversation_id}/cheatsheet", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_cheatsheet(conversation_id: str):
+    service = ConversationService()
+    if not service.get_conversation(conversation_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="对话不存在")
+    file_path = _cheatsheet_file(conversation_id)
+    if file_path.exists():
+        file_path.unlink()
+    return None
+
+
+@router.post("/{conversation_id}/cheatsheet/generate")
+async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateRequest):
+    service = ConversationService()
+    conversation = service.get_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="对话不存在")
+    if conversation.get("subject_id") != request.subject_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="subject 与当前对话不匹配")
+    if not request.document_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请选择至少一个 PDF 讲义文档")
+
+    doc_service = DocumentService()
+    subject_docs = {doc["file_id"]: doc for doc in doc_service.list_documents_for_subject(request.subject_id)}
+    selected_docs = []
+    for document_id in request.document_ids:
+        doc = subject_docs.get(document_id)
+        if not doc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"文档不存在: {document_id}")
+        if doc.get("status") != "completed":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"文档尚未处理完成: {doc.get('filename')}")
+        if doc.get("file_extension") != "pdf":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cheatsheet MVP 仅支持 PDF 讲义: {doc.get('filename')}")
+        file_path = doc_service.file_manager.get_file_path_for_subject(request.subject_id, document_id)
+        if not file_path or not file_path.exists():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"文档文件不存在: {doc.get('filename')}")
+        selected_docs.append((doc, file_path))
+
+    chat_config = config_service.get_config("chat")
+    api_key = chat_config.get("api_key")
+    if not api_key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Chat LLM API Key 未配置")
+
+    async def event_stream():
+        def emit(event: str, payload: Dict[str, Any]):
+            return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False)}\n\n"
+
+        try:
+            yield emit("progress", {"message": "正在读取 PDF 讲义", "current": 0, "total": len(selected_docs)})
+            generation_jobs = []
+            for doc_index, (doc, file_path) in enumerate(selected_docs, 1):
+                yield emit("progress", {"message": f"正在解析 {doc['filename']}", "current": doc_index, "total": len(selected_docs)})
+                text = (doc_service.document_parser.extract_text(str(file_path), file_id=doc["file_id"]) or "").strip()
+                if not text:
+                    yield emit("warning", {"message": f"{doc['filename']} 未提取到文本，已跳过"})
+                    continue
+
+                chunks = _chunk_text(text)
+                for chunk_index, chunk in enumerate(chunks, 1):
+                    generation_jobs.append({
+                        "filename": doc["filename"],
+                        "file_id": doc["file_id"],
+                        "chunk_index": chunk_index,
+                        "total_chunks": len(chunks),
+                        "text": chunk,
+                    })
+
+            if not generation_jobs:
+                yield emit("error", {"message": "没有可用于生成 cheatsheet 的 PDF 文本"})
+                return
+
+            layout = request.layout.model_dump()
+            options = request.content_options.model_dump()
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            url = f"{chat_config.get('host', '').rstrip('/')}/chat/completions"
+
+            async def stream_llm(client: httpx.AsyncClient, prompt_text: str):
+                payload = {
+                    "model": chat_config.get("model"),
+                    "messages": [
+                        {"role": "system", "content": "你只输出 Markdown cheatsheet 内容；禁止代码围栏；必须保留原文有效内容。"},
+                        {"role": "user", "content": prompt_text},
+                    ],
+                    "stream": True,
+                    "temperature": 0.05,
+                    "max_tokens": 8192,
+                }
+                async with client.stream("POST", url, headers=headers, json=payload) as response:
+                    if response.status_code >= 400:
+                        error_text = await response.aread()
+                        raise RuntimeError(f"LLM API 错误: {response.status_code}, {error_text.decode('utf-8', errors='replace')[:500]}")
+                    async for line in response.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        raw = line[5:].strip()
+                        if raw == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(raw)
+                            delta = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                        except Exception:
+                            delta = ""
+                        if delta:
+                            yield delta
+
+            faithful_mode = request.style in ("faithful", "auto")
+            if faithful_mode:
+                content_parts = []
+                page_jobs = []
+                for doc, file_path in selected_docs:
+                    text = (doc_service.document_parser.extract_text(str(file_path), file_id=doc["file_id"]) or "").strip()
+                    for page in _extract_pdf_pages(text):
+                        page_jobs.append({"doc": doc, "page": page})
+
+                if not page_jobs:
+                    yield emit("error", {"message": "没有可用于逐页转写的 PDF 文本"})
+                    return
+
+                async with httpx.AsyncClient(timeout=config.settings.timeout) as client:
+                    for page_index, job in enumerate(page_jobs, 1):
+                        doc = job["doc"]
+                        page = job["page"]
+                        heading = f"\n\n## Page {page.get('page', '?')} [FILE:{page.get('file_id', '')}][PAGE:{page.get('page', '?')}]\n\n"
+                        content_parts.append(heading)
+                        yield emit("chunk", {"content": heading})
+                        yield emit(
+                            "progress",
+                            {
+                                "message": f"正在用 LLM 逐页转写 {doc['filename']} 第 {page.get('page', '?')} 页",
+                                "current": page_index,
+                                "total": len(page_jobs),
+                            },
+                        )
+
+                        page_parts = []
+                        prompt = _build_faithful_page_prompt(doc["filename"], page, request)
+                        try:
+                            async for delta in stream_llm(client, prompt):
+                                page_parts.append(delta)
+                                content_parts.append(delta)
+                                yield emit("chunk", {"content": delta})
+                        except RuntimeError as exc:
+                            yield emit("error", {"message": str(exc)})
+                            return
+
+                        missing = _build_faithful_missing_lines(page, "".join(page_parts))
+                        if missing:
+                            content_parts.append(missing)
+                            yield emit("chunk", {"content": missing})
+
+                content = "\n\n".join(content_parts).strip()
+                saved = _save_cheatsheet(
+                    conversation_id,
+                    {
+                        "status": "completed",
+                        "content": content,
+                        "layout": layout,
+                        "content_options": options,
+                        "language": request.language,
+                        "style": request.style,
+                        "user_prompt": request.user_prompt,
+                        "document_ids": request.document_ids,
+                        "documents": [{"file_id": doc["file_id"], "filename": doc["filename"]} for doc, _ in selected_docs],
+                    },
+                )
+                yield emit("done", {"cheatsheet": saved})
+                return
+
+            content_parts = []
+            total_jobs = len(generation_jobs)
+
+            async with httpx.AsyncClient(timeout=config.settings.timeout) as client:
+                for job_index, job in enumerate(generation_jobs, 1):
+                    heading = f"\n\n## {job['filename']} - Part {job['chunk_index']}/{job['total_chunks']}\n\n"
+                    content_parts.append(heading)
+                    yield emit("chunk", {"content": heading})
+                    yield emit(
+                        "progress",
+                        {
+                            "message": f"正在生成 {job['filename']} 第 {job['chunk_index']}/{job['total_chunks']} 段",
+                            "current": job_index,
+                            "total": total_jobs,
+                        },
+                    )
+
+                    try:
+                        prompt = _build_cheatsheet_chunk_prompt(
+                            job["filename"],
+                            job["text"],
+                            job["chunk_index"],
+                            job["total_chunks"],
+                            request,
+                        )
+                        chunk_parts = []
+                        async for delta in stream_llm(client, prompt):
+                            chunk_parts.append(delta)
+                            content_parts.append(delta)
+                            yield emit("chunk", {"content": delta})
+                        chunk_output = "".join(chunk_parts)
+                        # Very short outputs are usually accidental summaries. Ask once more for omissions.
+                        if len(chunk_output.strip()) < max(900, len(job["text"]) * 0.45):
+                            backfill_heading = "\n\n### 补漏扩写\n\n"
+                            content_parts.append(backfill_heading)
+                            yield emit("chunk", {"content": backfill_heading})
+                            yield emit("progress", {"message": f"正在补漏扩写 {job['filename']} 第 {job['chunk_index']}/{job['total_chunks']} 段", "current": job_index, "total": total_jobs})
+                            backfill_prompt = _build_cheatsheet_backfill_prompt(job["filename"], job["text"], chunk_output, request)
+                            async for delta in stream_llm(client, backfill_prompt):
+                                content_parts.append(delta)
+                                yield emit("chunk", {"content": delta})
+                    except RuntimeError as exc:
+                        yield emit("error", {"message": str(exc)})
+                        return
+
+            content = "".join(content_parts).strip()
+            if not content:
+                yield emit("error", {"message": "LLM 未返回 cheatsheet 内容"})
+                return
+
+            saved = _save_cheatsheet(
+                conversation_id,
+                {
+                    "status": "completed",
+                    "content": content,
+                    "layout": layout,
+                    "content_options": options,
+                    "language": request.language,
+                    "style": request.style,
+                    "user_prompt": request.user_prompt,
+                    "document_ids": request.document_ids,
+                    "documents": [{"file_id": doc["file_id"], "filename": doc["filename"]} for doc, _ in selected_docs],
+                },
+            )
+            yield emit("done", {"cheatsheet": saved})
+        except Exception as exc:
+            yield emit("error", {"message": str(exc)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
