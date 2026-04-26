@@ -426,9 +426,7 @@
           <div class="cheatsheet-preview" :style="cheatsheetPreviewStyle">
             <div v-for="page in placeholderPages" :key="page" class="cheatsheet-page cheatsheet-placeholder-page" :style="cheatsheetPageStyle">
               <div class="cheatsheet-page-content cheatsheet-placeholder-content" :style="cheatsheetContentStyle">
-                <p v-for="(line, index) in cheatsheetPlaceholderLines" :key="`${page}-${index}`">
-                  {{ line }}
-                </p>
+                {{ cheatsheetPlaceholderText }}
               </div>
             </div>
           </div>
@@ -635,16 +633,6 @@ const cheatsheetPlaceholderText = computed(() => {
   return samples.flatMap(text => Array(50).fill(text)).join(' ')
 })
 
-const cheatsheetPlaceholderLines = computed(() => {
-  const samples = [
-    '这是一条测试语句，用于预览。',
-    'This is a test sentence for preview.',
-    'Это тестовое предложение для предварительного просмотра.',
-    'Ceci est une phrase de test pour l’aperçu.'
-  ]
-  return samples.flatMap(text => Array(50).fill(text))
-})
-
 const placeholderPages = computed(() => [1, 2])
 
 const marginMap = {
@@ -671,7 +659,7 @@ const cheatsheetPageStyle = computed(() => {
 const cheatsheetContentStyle = computed(() => ({
   fontSize: `${cheatsheetLayout.value.font_size}px`,
   lineHeight: cheatsheetLayout.value.line_height,
-  columnCount: cheatsheetEditMode.value ? cheatsheetLayout.value.columns : 1,
+  columnCount: cheatsheetLayout.value.columns,
   columnGap: '12px'
 }))
 
