@@ -15,6 +15,10 @@ requests-toolbelt>=1.0.0
 # 异步文件操作
 aiofiles==23.2.1
 
+# PDF 导出（服务端）
+playwright==1.55.0
+Markdown==3.6
+
 # LightRAG 核心依赖
 nanoid>=2.0.0
 numpy

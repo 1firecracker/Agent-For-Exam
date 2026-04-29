@@ -13,10 +13,21 @@ export const settingsService = {
     return response.data
   },
 
+  async updateProviderAPIKey(binding, apiKey) {
+    const response = await axios.post(`${API_BASE}/providers/${binding}/api-key`, {
+      api_key: apiKey
+    })
+    return response.data
+  },
+
+  async refreshProviderModels(binding) {
+    const response = await axios.post(`${API_BASE}/providers/${binding}/models/refresh`)
+    return response.data
+  },
+
   async getModelLists() {
     const response = await axios.get(`${API_BASE}/model-lists`)
     return response.data
   }
 }
-
 

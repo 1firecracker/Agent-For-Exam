@@ -34,6 +34,15 @@ export const useSettingsStore = defineStore('settings', () => {
   const modelLists = ref({
     siliconflow: []
   })
+
+  const providers = ref({
+    siliconflow: {
+      has_api_key: false,
+      host: 'https://api.siliconflow.cn/v1',
+      last_synced_at: '',
+      last_error: ''
+    }
+  })
   
   const loading = ref(false)
 
@@ -49,6 +58,7 @@ export const useSettingsStore = defineStore('settings', () => {
         ocr: data.ocr || { binding: 'siliconflow', model: '', host: '' }
       }
       modelLists.value = data.model_lists || {}
+      providers.value = data.providers || providers.value
     } catch (error) {
       console.error('加载配置失败:', error)
       throw error
@@ -66,6 +76,9 @@ export const useSettingsStore = defineStore('settings', () => {
       if (result.model_lists) {
         modelLists.value = result.model_lists
       }
+      if (result.providers) {
+        providers.value = result.providers
+      }
       return result
     } catch (error) {
       console.error('更新配置失败:', error)
@@ -75,13 +88,53 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  async function updateProviderAPIKey(binding, apiKey) {
+    loading.value = true
+    try {
+      const result = await settingsService.updateProviderAPIKey(binding, apiKey)
+      if (result.model_lists) {
+        modelLists.value = result.model_lists
+      }
+      if (result.providers) {
+        providers.value = result.providers
+      }
+      return result
+    } catch (error) {
+      console.error('更新统一 API Key 失败:', error)
+      throw error
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function refreshProviderModels(binding) {
+    loading.value = true
+    try {
+      const result = await settingsService.refreshProviderModels(binding)
+      if (result.model_lists) {
+        modelLists.value = result.model_lists
+      }
+      if (result.providers) {
+        providers.value = result.providers
+      }
+      return result
+    } catch (error) {
+      console.error('刷新模型列表失败:', error)
+      throw error
+    } finally {
+      loading.value = false
+    }
+  }
+
   return {
     configs,
     modelLists,
+    providers,
     loading,
     loadConfig,
-    updateConfig
+    updateConfig,
+    updateProviderAPIKey,
+    refreshProviderModels
   }
 })
-
 

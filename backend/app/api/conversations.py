@@ -6,8 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import httpx
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 import app.config as config
@@ -51,6 +51,7 @@ class CheatsheetLayout(BaseModel):
     font_size: int = Field(default=10, ge=8, le=14)
     line_height: float = Field(default=1.2, ge=1.0, le=1.5)
     margin: str = "narrow"
+    margin_mm: int = Field(default=8, ge=4, le=30)
     columns: int = Field(default=2, ge=1, le=4)
 
 
@@ -82,8 +83,106 @@ class CheatsheetUpdateRequest(BaseModel):
     user_prompt: Optional[str] = None
 
 
+class CheatsheetPdfRequest(BaseModel):
+    # 可选：如果不传 content，则使用已保存的 cheatsheet.content
+    content: Optional[str] = None
+    html: Optional[str] = None
+    layout: Optional[CheatsheetLayout] = None
+    content_options: Optional[CheatsheetContentOptions] = None
+    language: Optional[str] = None
+    style: Optional[str] = None
+
+
 def _cheatsheet_file(conversation_id: str) -> Path:
     return Path(config.settings.conversations_dir) / conversation_id / "cheatsheet.json"
+
+
+def _strip_markdown_fence(content: str) -> str:
+    text = (content or "").strip()
+    match = re.match(r"^```(?:markdown|md)?\s*([\s\S]*?)\s*```$", text, re.IGNORECASE)
+    return match.group(1).strip() if match else text
+
+
+def _normalize_cheatsheet_soft_breaks(content: str) -> str:
+    """Fold PDF/PPT extraction soft breaks so preview and PDF export use the same text shape."""
+    if not content:
+        return content
+
+    normalized_content = _strip_markdown_fence(content).replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalized_content.split("\n")
+    nonblank = [line.strip() for line in lines if line.strip()]
+
+    blank_count = len(lines) - len(nonblank)
+    short_count = sum(1 for line in nonblank if len(line) <= 18)
+    is_stream_spaced = (
+        len(nonblank) >= 80
+        and blank_count >= len(nonblank) * 0.5
+        and short_count / len(nonblank) >= 0.8
+    )
+
+    repaired: List[str] = []
+    paragraph_parts: List[str] = []
+    in_fence = False
+
+    def is_structural(line: str) -> bool:
+        if not line:
+            return True
+        if line.startswith("```"):
+            return True
+        return bool(re.match(r"^(#{1,6}\s+|[-*]\s+|\d+\.\s+|>\s+|\|)", line))
+
+    def normalize_joined_text(joined: str) -> str:
+        text = re.sub(r"\s+([,.;:!?%)\]])", r"\1", joined)
+        text = re.sub(r"([(\[])\s+", r"\1", text)
+        text = re.sub(r"\*\*\s+([^*]+?)\s+\*\*", r"**\1**", text)
+        return re.sub(r"\s{2,}", " ", text).strip()
+
+    def flush_paragraph() -> None:
+        if not paragraph_parts:
+            return
+        trimmed = [part.strip() for part in paragraph_parts if part.strip()]
+        if not trimmed:
+            paragraph_parts.clear()
+            return
+        avg_len = sum(len(part) for part in trimmed) / len(trimmed)
+        if is_stream_spaced or (len(trimmed) >= 12 and avg_len <= 18):
+            repaired.append(normalize_joined_text(" ".join(trimmed)))
+        else:
+            repaired.append("\n".join(part.rstrip() for part in paragraph_parts).rstrip())
+        paragraph_parts.clear()
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            if is_stream_spaced:
+                continue
+            flush_paragraph()
+            if repaired and repaired[-1] != "":
+                repaired.append("")
+            continue
+        if line.startswith("```"):
+            flush_paragraph()
+            in_fence = not in_fence
+            repaired.append(raw_line.rstrip())
+            continue
+        if in_fence:
+            repaired.append(raw_line.rstrip())
+            continue
+        if is_structural(line):
+            flush_paragraph()
+            repaired.append(raw_line.rstrip())
+            continue
+        paragraph_parts.append(raw_line)
+
+    flush_paragraph()
+    if is_stream_spaced:
+        return "\n\n".join(part for part in repaired if part).strip()
+    return "\n".join(repaired).strip()
+
+
+def _repair_stream_spaced_cheatsheet(content: str) -> str:
+    """Backward-compatible wrapper for old saved cheatsheets."""
+    return _normalize_cheatsheet_soft_breaks(content)
 
 
 def _load_cheatsheet(conversation_id: str) -> Optional[Dict[str, Any]]:
@@ -92,7 +191,10 @@ def _load_cheatsheet(conversation_id: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         with open(file_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get("content"), str):
+            data["content"] = _repair_stream_spaced_cheatsheet(data["content"])
+        return data
     except Exception:
         return None
 
@@ -171,7 +273,7 @@ def _build_cheatsheet_chunk_prompt(
 生成风格：{style}
 语言偏好：{request.language}（auto 表示默认使用讲义主要语言）
 内容密度：{options.density}
-排版约束：纸张 {layout.paper_type}，方向 {layout.orientation}，字号 {layout.font_size}px，{layout.columns} 栏。
+排版约束：纸张 {layout.paper_type}，方向 {layout.orientation}，字号 {layout.font_size}px，页边距 {layout.margin_mm}mm，{layout.columns} 栏。
 内容选项：
 - 包含公式：{options.include_formulas}
 - 包含定义：{options.include_definitions}
@@ -233,7 +335,7 @@ def _extract_pdf_pages(text: str) -> List[Dict[str, Any]]:
         line = raw_line.strip()
         if not line:
             continue
-        marker = re.match(r"^\[FILE:([^\]]+)\]\[PAGE:(\d+)\]$", line)
+        marker = re.match(r"^\[FILE:([^\]]+)\]\[(?:PAGE|SLIDE):(\d+)\]$", line)
         if marker:
             current_page = {
                 "file_id": marker.group(1),
@@ -253,7 +355,7 @@ def _extract_pdf_pages(text: str) -> List[Dict[str, Any]]:
 def _build_faithful_page_prompt(filename: str, page: Dict[str, Any], request: CheatsheetGenerateRequest) -> str:
     custom_prompt = request.user_prompt.strip() if request.user_prompt else "完整保留所有有效内容，逐页逐条转写原文，不要摘要，不要合并。"
     page_text = "\n".join(page.get("lines", []))
-    return f"""你是讲义 cheatsheet 的逐页转写助手。请把当前 PDF 页面转写成 Markdown cheatsheet。
+    return f"""你是讲义 cheatsheet 的逐页转写助手。请把当前讲义页面/幻灯片转写成 Markdown cheatsheet。
 
 硬性要求：
 - 必须使用 LLM 进行轻量整理，但不能摘要、不能合并、不能省略。
@@ -772,15 +874,21 @@ async def delete_cheatsheet(conversation_id: str):
 
 
 @router.post("/{conversation_id}/cheatsheet/generate")
-async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateRequest):
+async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateRequest, http_request: Request):
     service = ConversationService()
     conversation = service.get_conversation(conversation_id)
     if not conversation:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="对话不存在")
-    if conversation.get("subject_id") != request.subject_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="subject 与当前对话不匹配")
+    conv_subject_id = conversation.get("subject_id")
+    if conv_subject_id != request.subject_id:
+        # 兼容：历史对话可能未绑定 subject_id（为 None/空字符串），此时允许自动绑定后继续生成
+        if not conv_subject_id:
+            service.update_conversation(conversation_id, subject_id=request.subject_id)
+            conversation = service.get_conversation(conversation_id) or conversation
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="subject 与当前对话不匹配")
     if not request.document_ids:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请选择至少一个 PDF 讲义文档")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请选择至少一个讲义文档")
 
     doc_service = DocumentService()
     subject_docs = {doc["file_id"]: doc for doc in doc_service.list_documents_for_subject(request.subject_id)}
@@ -791,8 +899,13 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"文档不存在: {document_id}")
         if doc.get("status") != "completed":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"文档尚未处理完成: {doc.get('filename')}")
-        if doc.get("file_extension") != "pdf":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cheatsheet MVP 仅支持 PDF 讲义: {doc.get('filename')}")
+        ext = (doc.get("file_extension") or "").strip().lower()
+        ext = ext.lstrip(".")
+        if ext not in ("pdf", "pptx"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cheatsheet 仅支持 PDF / PPTX 讲义: {doc.get('filename')}",
+            )
         file_path = doc_service.file_manager.get_file_path_for_subject(request.subject_id, document_id)
         if not file_path or not file_path.exists():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"文档文件不存在: {doc.get('filename')}")
@@ -807,10 +920,20 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
         def emit(event: str, payload: Dict[str, Any]):
             return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False)}\n\n"
 
+        async def should_stop() -> bool:
+            try:
+                return await http_request.is_disconnected()
+            except Exception:
+                return False
+
         try:
-            yield emit("progress", {"message": "正在读取 PDF 讲义", "current": 0, "total": len(selected_docs)})
+            if await should_stop():
+                return
+            yield emit("progress", {"message": "正在读取讲义", "current": 0, "total": len(selected_docs)})
             generation_jobs = []
             for doc_index, (doc, file_path) in enumerate(selected_docs, 1):
+                if await should_stop():
+                    return
                 yield emit("progress", {"message": f"正在解析 {doc['filename']}", "current": doc_index, "total": len(selected_docs)})
                 text = (doc_service.document_parser.extract_text(str(file_path), file_id=doc["file_id"]) or "").strip()
                 if not text:
@@ -828,7 +951,7 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
                     })
 
             if not generation_jobs:
-                yield emit("error", {"message": "没有可用于生成 cheatsheet 的 PDF 文本"})
+                yield emit("error", {"message": "没有可用于生成 cheatsheet 的讲义文本"})
                 return
 
             layout = request.layout.model_dump()
@@ -837,6 +960,8 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
             url = f"{chat_config.get('host', '').rstrip('/')}/chat/completions"
 
             async def stream_llm(client: httpx.AsyncClient, prompt_text: str):
+                if await should_stop():
+                    return
                 payload = {
                     "model": chat_config.get("model"),
                     "messages": [
@@ -864,22 +989,28 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
                             delta = ""
                         if delta:
                             yield delta
+                        if await should_stop():
+                            return
 
             faithful_mode = request.style in ("faithful", "auto")
             if faithful_mode:
                 content_parts = []
                 page_jobs = []
                 for doc, file_path in selected_docs:
+                    if await should_stop():
+                        return
                     text = (doc_service.document_parser.extract_text(str(file_path), file_id=doc["file_id"]) or "").strip()
                     for page in _extract_pdf_pages(text):
                         page_jobs.append({"doc": doc, "page": page})
 
                 if not page_jobs:
-                    yield emit("error", {"message": "没有可用于逐页转写的 PDF 文本"})
+                    yield emit("error", {"message": "没有可用于逐页转写的讲义文本"})
                     return
 
                 async with httpx.AsyncClient(timeout=config.settings.timeout) as client:
                     for page_index, job in enumerate(page_jobs, 1):
+                        if await should_stop():
+                            return
                         doc = job["doc"]
                         page = job["page"]
                         heading = f"\n\n## Page {page.get('page', '?')} [FILE:{page.get('file_id', '')}][PAGE:{page.get('page', '?')}]\n\n"
@@ -898,6 +1029,8 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
                         prompt = _build_faithful_page_prompt(doc["filename"], page, request)
                         try:
                             async for delta in stream_llm(client, prompt):
+                                if await should_stop():
+                                    return
                                 page_parts.append(delta)
                                 content_parts.append(delta)
                                 yield emit("chunk", {"content": delta})
@@ -910,7 +1043,7 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
                             content_parts.append(missing)
                             yield emit("chunk", {"content": missing})
 
-                content = "\n\n".join(content_parts).strip()
+                content = "".join(content_parts).strip()
                 saved = _save_cheatsheet(
                     conversation_id,
                     {
@@ -933,6 +1066,8 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
 
             async with httpx.AsyncClient(timeout=config.settings.timeout) as client:
                 for job_index, job in enumerate(generation_jobs, 1):
+                    if await should_stop():
+                        return
                     heading = f"\n\n## {job['filename']} - Part {job['chunk_index']}/{job['total_chunks']}\n\n"
                     content_parts.append(heading)
                     yield emit("chunk", {"content": heading})
@@ -955,6 +1090,8 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
                         )
                         chunk_parts = []
                         async for delta in stream_llm(client, prompt):
+                            if await should_stop():
+                                return
                             chunk_parts.append(delta)
                             content_parts.append(delta)
                             yield emit("chunk", {"content": delta})
@@ -967,6 +1104,8 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
                             yield emit("progress", {"message": f"正在补漏扩写 {job['filename']} 第 {job['chunk_index']}/{job['total_chunks']} 段", "current": job_index, "total": total_jobs})
                             backfill_prompt = _build_cheatsheet_backfill_prompt(job["filename"], job["text"], chunk_output, request)
                             async for delta in stream_llm(client, backfill_prompt):
+                                if await should_stop():
+                                    return
                                 content_parts.append(delta)
                                 yield emit("chunk", {"content": delta})
                     except RuntimeError as exc:
@@ -1002,3 +1141,247 @@ async def generate_cheatsheet(conversation_id: str, request: CheatsheetGenerateR
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
+
+@router.post("/{conversation_id}/cheatsheet/pdf")
+async def export_cheatsheet_pdf(conversation_id: str, request: CheatsheetPdfRequest):
+    service = ConversationService()
+    if not service.get_conversation(conversation_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="对话不存在")
+
+    saved = _load_cheatsheet(conversation_id) or {}
+    content_md = _normalize_cheatsheet_soft_breaks(
+        request.content if request.content is not None else saved.get("content") or ""
+    ).strip()
+    if not content_md:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="暂无 cheatsheet 内容可导出")
+
+    layout = (request.layout.model_dump() if request.layout else (saved.get("layout") or CheatsheetLayout().model_dump()))
+    paper_type = layout.get("paper_type", "A4")
+    orientation = layout.get("orientation", "portrait")
+    font_size = int(layout.get("font_size", 10))
+    line_height = float(layout.get("line_height", 1.2))
+    margin_mm = int(layout.get("margin_mm", layout.get("margin", 8) if isinstance(layout.get("margin"), int) else 8))
+    columns = int(layout.get("columns", 2))
+
+    html_body = (request.html or "").strip()
+    if not html_body:
+        try:
+            import markdown as md
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Markdown 渲染依赖缺失: {exc}")
+
+        html_body = md.markdown(
+            content_md,
+            extensions=["tables", "fenced_code", "sane_lists", "toc"],
+            output_format="html5",
+        )
+
+    # 纸张尺寸（mm）
+    paper_mm = {
+        "A4": (210, 297),
+        "Letter": (216, 279),
+        "A5": (148, 210),
+    }.get(paper_type, (210, 297))
+    page_w, page_h = paper_mm
+    if orientation == "landscape":
+        page_w, page_h = page_h, page_w
+    column_count = max(1, columns)
+
+    # 纯打印页面（避免带入应用 UI）。后续通过 Playwright 显式生成每一页，
+    # 与前端预览的“横向多栏带 + 裁切”分页逻辑保持一致。
+    html = f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>cheatsheet</title>
+  <style>
+    @page {{
+      size: {page_w}mm {page_h}mm;
+      margin: 0;
+    }}
+    html, body {{
+      padding: 0;
+      margin: 0;
+      background: #fff;
+      color: #111827;
+    }}
+    body {{
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      font-size: {font_size}px;
+      line-height: {line_height};
+    }}
+    #pages {{
+      background: #fff;
+    }}
+    .cheatsheet-page {{
+      box-sizing: border-box;
+      width: {page_w}mm;
+      height: {page_h}mm;
+      padding: {margin_mm}mm;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      background: #fff;
+      break-after: page;
+      page-break-after: always;
+    }}
+    .cheatsheet-page:last-child {{
+      break-after: auto;
+      page-break-after: auto;
+    }}
+    .cheatsheet-flow-slice {{
+      flex: 1 1 auto;
+      overflow: hidden;
+      position: relative;
+    }}
+    .cheatsheet-page-content {{
+      text-align: justify;
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      font-size: {font_size}px;
+      line-height: {line_height};
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }}
+    .cheatsheet-flow-content {{
+      column-count: {column_count};
+      column-gap: 12px;
+      column-fill: auto;
+      overflow: visible;
+    }}
+    #measure-page {{
+      position: absolute;
+      left: -99999px;
+      top: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }}
+    #measure {{
+      overflow-x: auto;
+      overflow-y: hidden;
+    }}
+    .cheatsheet-page-number {{
+      flex: 0 0 auto;
+      height: 18px;
+      line-height: 18px;
+      margin-top: 0;
+      color: #6b7280;
+      font-size: 10px;
+      text-align: center;
+    }}
+    h1,h2,h3 {{
+      margin: 0 0 0.55em;
+      line-height: 1.15;
+      font-family: "Merriweather", Georgia, "Times New Roman", "Noto Serif SC", serif;
+      font-weight: 700;
+      color: #1A1A1A;
+    }}
+    p,ul,ol,table {{
+      margin-top: 0;
+      margin-bottom: 0.65em;
+    }}
+    table {{
+      border-collapse: collapse;
+      width: 100%;
+      table-layout: fixed;
+    }}
+    th,td {{
+      border: 1px solid #d1d5db;
+      padding: 3px 5px;
+      vertical-align: top;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }}
+    pre {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
+    code {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
+  </style>
+</head>
+<body>
+  <section id="measure-page" class="cheatsheet-page">
+    <div id="measure-frame" class="cheatsheet-flow-slice">
+      <div id="measure" class="cheatsheet-page-content cheatsheet-flow-content">
+        {html_body}
+      </div>
+    </div>
+    <div class="cheatsheet-page-number">Page 0</div>
+  </section>
+  <main id="pages"></main>
+</body>
+</html>"""
+
+    try:
+        from playwright.async_api import async_playwright
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Playwright 依赖缺失: {exc}")
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page = await browser.new_page()
+        await page.set_content(html, wait_until="load")
+        await page.evaluate(
+            """() => {
+                const measurePage = document.getElementById('measure-page');
+                const measureFrame = document.getElementById('measure-frame');
+                const source = document.getElementById('measure');
+                const pagesRoot = document.getElementById('pages');
+                if (!measurePage || !measureFrame || !source || !pagesRoot) return;
+
+                const columnGap = 12;
+                const frameRect = measureFrame.getBoundingClientRect();
+                const innerW = Math.max(80, frameRect.width);
+                const innerH = Math.max(80, frameRect.height);
+
+                source.style.width = `${innerW}px`;
+                source.style.height = `${innerH}px`;
+
+                const totalW = Math.max(innerW, source.scrollWidth || 0);
+                const pageStride = innerW + columnGap;
+                const pageCount = Math.max(1, Math.ceil((totalW + columnGap) / pageStride));
+                const sourceHtml = source.innerHTML;
+
+                pagesRoot.innerHTML = '';
+                for (let i = 0; i < pageCount; i += 1) {
+                    const pageEl = document.createElement('section');
+                    pageEl.className = 'cheatsheet-page';
+
+                    const sliceEl = document.createElement('div');
+                    sliceEl.className = 'cheatsheet-flow-slice';
+                    sliceEl.style.width = `${innerW}px`;
+                    sliceEl.style.height = `${innerH}px`;
+
+                    const flowEl = document.createElement('div');
+                    flowEl.className = 'cheatsheet-page-content cheatsheet-flow-content';
+                    flowEl.style.width = `${innerW}px`;
+                    flowEl.style.height = `${innerH}px`;
+                    flowEl.style.transform = `translateX(-${i * pageStride}px)`;
+                    flowEl.style.transformOrigin = 'top left';
+                    flowEl.innerHTML = sourceHtml;
+
+                    const pageNumberEl = document.createElement('div');
+                    pageNumberEl.className = 'cheatsheet-page-number';
+                    pageNumberEl.textContent = `Page ${i + 1}`;
+
+                    sliceEl.appendChild(flowEl);
+                    pageEl.appendChild(sliceEl);
+                    pageEl.appendChild(pageNumberEl);
+                    pagesRoot.appendChild(pageEl);
+                }
+
+                measurePage.remove();
+            }"""
+        )
+        await page.emulate_media(media="print")
+        pdf_bytes = await page.pdf(
+            width=f"{page_w}mm",
+            height=f"{page_h}mm",
+            print_background=True,
+            margin={"top": "0mm", "right": "0mm", "bottom": "0mm", "left": "0mm"},
+            prefer_css_page_size=True,
+        )
+        await browser.close()
+
+    filename = f"cheatsheet-{conversation_id}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

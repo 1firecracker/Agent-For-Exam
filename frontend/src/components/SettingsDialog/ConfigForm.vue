@@ -22,18 +22,6 @@
       <div class="form-tip">可以从列表选择，也可以手动输入自定义模型名称</div>
     </el-form-item>
 
-    <!-- API Key -->
-    <el-form-item label="API Key">
-      <el-input
-        v-model="localConfig.api_key"
-        type="password"
-        show-password
-        placeholder="输入 API Key（留空则不更新）"
-        @blur="handleApiKeyChange"
-      />
-      <div class="form-tip">留空则保留原有 API Key，输入新值则更新</div>
-    </el-form-item>
-
     <!-- 保存按钮 -->
     <el-form-item>
       <el-button type="primary" @click="handleSave" :loading="saving">
@@ -67,8 +55,7 @@ const emit = defineEmits(['update'])
 
 const localConfig = ref({
   binding: props.defaultBinding, // 使用传入的 binding
-  model: '',
-  api_key: ''
+  model: ''
 })
 
 const saving = ref(false)
@@ -82,9 +69,8 @@ const availableModels = computed(() => {
 watch(() => props.config, (newConfig) => {
   if (newConfig) {
     localConfig.value = {
-      binding: newConfig.binding || props.defaultBinding, // 使用配置的 binding 或默认值
-      model: newConfig.model || '',
-      api_key: '' // API Key 不显示，需要用户重新输入
+      binding: props.defaultBinding,
+      model: newConfig.model || ''
     }
   }
 }, { immediate: true })
@@ -94,32 +80,18 @@ function handleModelChange() {
   // 可以在这里添加验证逻辑
 }
 
-// API Key 变化
-function handleApiKeyChange() {
-  // 可以在这里添加验证逻辑
-}
-
 // 保存配置
 function handleSave() {
   saving.value = true
   
   // 构建更新数据（使用配置的 binding，host 固定为硅基流动地址）
   const updateData = {
-    binding: localConfig.value.binding || props.defaultBinding, // 使用配置的 binding
+    binding: props.defaultBinding,
     model: localConfig.value.model,
     host: 'https://api.siliconflow.cn/v1' // 固定为硅基流动地址
   }
   
-  // 只有当 api_key 不为空时才传递
-  if (localConfig.value.api_key && localConfig.value.api_key.trim()) {
-    updateData.api_key = localConfig.value.api_key
-  }
-  
   emit('update', updateData)
-  
-  // 清空 API Key 输入（已保存）
-  localConfig.value.api_key = ''
-  
   saving.value = false
 }
 </script>
@@ -131,4 +103,3 @@ function handleSave() {
   margin-top: 4px;
 }
 </style>
-

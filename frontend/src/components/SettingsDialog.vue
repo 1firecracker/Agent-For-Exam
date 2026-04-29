@@ -5,6 +5,48 @@
     width="800px"
     :before-close="handleClose"
   >
+    <section class="provider-panel">
+      <div class="provider-header">
+        <div>
+          <div class="provider-title">统一 API Key</div>
+          <div class="provider-meta">
+            SiliconFlow
+            <el-tag
+              size="small"
+              :type="providers.siliconflow?.has_api_key ? 'success' : 'warning'"
+            >
+              {{ providers.siliconflow?.has_api_key ? '已配置' : '未配置' }}
+            </el-tag>
+          </div>
+        </div>
+        <el-button size="small" @click="handleRefreshModels" :loading="refreshingModels">
+          刷新模型列表
+        </el-button>
+      </div>
+
+      <el-form label-width="120px" label-position="left">
+        <el-form-item label="API Key">
+          <el-input
+            v-model="providerApiKey"
+            type="password"
+            show-password
+            placeholder="输入 SiliconFlow API Key"
+          />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" @click="handleProviderKeySave" :loading="savingProviderKey">
+            保存统一 Key
+          </el-button>
+          <span class="sync-status" v-if="providers.siliconflow?.last_synced_at">
+            上次同步：{{ providers.siliconflow.last_synced_at }}
+          </span>
+        </el-form-item>
+        <div class="sync-error" v-if="providers.siliconflow?.last_error">
+          {{ providers.siliconflow.last_error }}
+        </div>
+      </el-form>
+    </section>
+
     <el-tabs v-model="activeTab">
       <!-- 知识图谱配置 -->
       <el-tab-pane label="知识图谱抽取" name="knowledge_graph">
@@ -78,10 +120,14 @@ const emit = defineEmits(['update:modelValue'])
 const settingsStore = useSettingsStore()
 const dialogVisible = ref(false)
 const activeTab = ref('knowledge_graph')
+const providerApiKey = ref('')
+const savingProviderKey = ref(false)
+const refreshingModels = ref(false)
 
 // 计算属性
 const configs = computed(() => settingsStore.configs)
 const modelLists = computed(() => settingsStore.modelLists)
+const providers = computed(() => settingsStore.providers)
 
 // 监听 modelValue 变化
 watch(() => props.modelValue, (val) => {
@@ -115,6 +161,40 @@ async function handleUpdate(scene, config) {
   }
 }
 
+async function handleProviderKeySave() {
+  if (!providerApiKey.value.trim()) {
+    ElMessage.warning('请输入 API Key')
+    return
+  }
+
+  savingProviderKey.value = true
+  try {
+    const result = await settingsStore.updateProviderAPIKey('siliconflow', providerApiKey.value)
+    providerApiKey.value = ''
+    if (result.refresh_error) {
+      ElMessage.warning('API Key 已保存，但模型列表刷新失败: ' + result.refresh_error)
+    } else {
+      ElMessage.success('统一 API Key 已保存，模型列表已刷新')
+    }
+  } catch (error) {
+    ElMessage.error('保存统一 API Key 失败: ' + (error.response?.data?.detail || error.message))
+  } finally {
+    savingProviderKey.value = false
+  }
+}
+
+async function handleRefreshModels() {
+  refreshingModels.value = true
+  try {
+    await settingsStore.refreshProviderModels('siliconflow')
+    ElMessage.success('模型列表已刷新')
+  } catch (error) {
+    ElMessage.error('刷新模型列表失败: ' + (error.response?.data?.detail || error.message))
+  } finally {
+    refreshingModels.value = false
+  }
+}
+
 // 关闭对话框
 function handleClose() {
   dialogVisible.value = false
@@ -128,3 +208,46 @@ onMounted(() => {
 })
 </script>
 
+<style scoped>
+.provider-panel {
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  padding: 16px 16px 10px;
+  margin-bottom: 16px;
+}
+
+.provider-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.provider-title {
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 4px;
+}
+
+.provider-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #606266;
+  font-size: 13px;
+}
+
+.sync-status {
+  margin-left: 12px;
+  color: #909399;
+  font-size: 12px;
+}
+
+.sync-error {
+  color: #f56c6c;
+  font-size: 12px;
+  margin: -4px 0 8px 120px;
+  word-break: break-word;
+}
+</style>

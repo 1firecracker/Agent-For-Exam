@@ -29,6 +29,24 @@ export const settingsService = {
   },
 
   /**
+   * 更新统一服务商 API Key
+   */
+  async updateProviderAPIKey(binding, apiKey) {
+    const response = await axios.post(`${API_BASE}/providers/${binding}/api-key`, {
+      api_key: apiKey
+    })
+    return response.data
+  },
+
+  /**
+   * 刷新服务商模型列表
+   */
+  async refreshProviderModels(binding) {
+    const response = await axios.post(`${API_BASE}/providers/${binding}/models/refresh`)
+    return response.data
+  },
+
+  /**
    * 获取支持的模型列表
    */
   async getModelLists() {
@@ -36,4 +54,3 @@ export const settingsService = {
     return response.data
   }
 }
-

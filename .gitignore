@@ -96,6 +96,7 @@ test_doc/
 # 日志文件
 *.log
 logs/
+.pids/
 
 # 操作系统文件
 .DS_Store

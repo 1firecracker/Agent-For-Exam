@@ -47,7 +47,10 @@ NLP_project/
 │   │   └── services/         # API 服务
 │   └── package.json
 ├── LightRAG/                   # LightRAG 框架核心代码
-└── start_all.ps1              # 一键启动脚本
+├── start_all.ps1              # Windows 一键启动脚本
+├── stop_all.ps1               # Windows 一键停止脚本
+├── start_all.sh               # macOS / Linux 一键启动脚本
+└── stop_all.sh                # macOS / Linux 一键停止脚本
 ```
 
 ## 环境要求
@@ -57,7 +60,20 @@ NLP_project/
 
 ### 开发（本地）
 - 后端：Python 3.10+、pip
-- 前端：Node.js 16+、npm 或 yarn
+- 前端：Node.js 16+、npm
+- PPTX 预览：LibreOffice（本地启动需要，Docker 镜像已内置）
+
+macOS / Linux 可先检查本机环境：
+
+```bash
+python3 --version
+node --version
+npm --version
+```
+
+如果 `node` 或 `npm` 不存在，请先从 https://nodejs.org 安装 Node.js LTS；npm 会随 Node.js 一起安装。
+如果 `python3` 版本低于 3.10，请先从 https://www.python.org/downloads/ 安装新版 Python。
+如果 PPTX 无法预览，请从 https://www.libreoffice.org/download/download-libreoffice/ 安装 LibreOffice。
 
 ## 安装步骤
 
@@ -68,62 +84,76 @@ git clone https://github.com/1firecracker/Agent-For-Exam.git
 cd NLP_project
 ```
 
-### 2. 部署（Docker，推荐）
+### 2. Docker 启动（跨平台，可选）
 
-一条命令启动前后端（需已安装 Docker Desktop）：
+适用于已安装 Docker Desktop 的 Windows / macOS / Linux。Docker 启动不区分 PowerShell、CMD 或 zsh，只要终端能执行 `docker compose` 即可。
 
-```bash
+启动：
+
+```sh
 docker compose up -d
+```
+
+停止：
+
+```sh
+docker compose down
 ```
 
 - 访问前端：http://localhost  
 - API 文档：http://localhost:8000/docs  
 
-**其余配置在应用内完成**：打开页面后点击右上角 **设置**（⚙️），在设置页中配置 LLM API Key、模型等；带默认项的会自动使用默认值。  
+**其余配置在应用内完成**：打开页面后点击右上角 **设置**（⚙️），在设置页中配置统一 API Key 和各场景使用的模型；带默认项的会自动使用默认值。
 
-### 3. 开发（本地启动）
+### 3. 本地启动（不使用 Docker）
 
-#### 3.1 后端环境配置
+本地启动会直接使用本机的 Python / Node.js 环境。Windows 使用 PowerShell 脚本，macOS / Linux 使用 Shell 脚本。
 
-```bash
-# 进入后端目录
-cd backend
-
-# 创建虚拟环境（Windows）
-python -m venv venv
-
-# 激活虚拟环境
-# Windows CMD:
-venv\Scripts\activate.bat
-# Windows PowerShell:
-.\venv\Scripts\Activate.ps1
-
-# 安装依赖
-pip install -r requirements.txt
-```
-
-#### 3.2 前端环境配置
+macOS / Linux：
 
 ```bash
-# 进入前端目录
-cd frontend
-
-# 安装依赖
-npm install
+chmod +x start_all.sh stop_all.sh
+./start_all.sh
+./stop_all.sh
 ```
 
-#### 3.3 环境变量（可选）
+Windows PowerShell：
 
-当前默认不依赖额外的后端环境变量即可完成基础功能，常用配置（LLM API Key、模型等）都通过前端「设置」页面管理。  
+```powershell
+.\start_all.ps1
+.\stop_all.ps1
+```
+
+一键脚本会启动：
+
+- 后端服务：http://localhost:8000
+- 前端应用：http://localhost:5173
+
+macOS 执行 `./start_all.sh` 会弹出 Terminal 窗口显示后端和前端日志；Linux 会后台启动并写入 `logs/`。
+
+如果希望 macOS / Linux 后端启用 `uvicorn --reload` 热更新，可以使用：
+
+```bash
+AFE_RELOAD=1 ./start_all.sh
+```
+
+需要手动分开启动时，请参考：
+
+- 后端说明：[backend/README.md](./backend/README.md)
+- 前端说明：[frontend/README.md](./frontend/README.md)
+
+#### 环境变量（可选）
+
+当前默认不依赖额外的后端环境变量即可完成基础功能，常用配置（统一 API Key、各场景模型等）都通过前端「设置」页面管理。
 如需为后端增加其他自定义配置，可在 `backend/.env` 中按需添加对应键值，应用会通过 `pydantic-settings` 自动加载。
 
-### 4. 使用 Docker 进行本地开发调试（可选）
+### 4. Docker 开发调试（跨平台，可选）
 
-如果希望在 Docker 中进行日常开发调试（而不是本机直接运行 Python / Node），可以使用 `docker-compose.dev.yml`：
+如果希望在 Docker 中进行日常开发调试（而不是本机直接运行 Python / Node），可以使用 `docker-compose.dev.yml`。这仍然是 Docker 方案，不是 Windows 本地启动方式。
 
-- 启动开发环境（后端 + 前端）：
+启动：
 
-```bash
+```sh
 docker compose -f docker-compose.dev.yml up --build
 ```
 
@@ -135,53 +165,46 @@ docker compose -f docker-compose.dev.yml up --build
 - 后端：`./backend` 目录挂载到容器中，使用 `uvicorn --reload`，修改 Python 代码后会自动重载。
 - 前端：`./frontend` 目录挂载到容器中，由 Vite Dev Server 提供服务，修改前端代码会自动热更新。
 
-停止开发环境：
+停止：
 
-```bash
+```sh
 docker compose -f docker-compose.dev.yml down
 ```
 
-> 生产/正式部署仍使用前文的 `docker compose up -d`，`docker-compose.dev.yml` 仅用于本地开发调试。
+> 生产/正式部署仍使用前文的 `docker compose up -d`，`docker-compose.dev.yml` 仅用于 Docker 开发调试。
 
 ### 5. LLM 配置（通过前端界面）
 
 **重要**：LLM API Key 和模型配置通过前端界面进行管理，无需在 `.env` 文件中配置。
 
-启动应用后，点击右上角的 **设置按钮**（⚙️），可以分别配置：
+启动应用后，点击右上角的 **设置按钮**（⚙️），先在顶部配置 **统一 API Key**，再分别为不同场景选择模型：
 
 1. **知识图谱抽取**：用于文档知识抽取和知识图谱构建
 2. **聊天对话**：用于智能问答和 Agent 模式
 3. **思维导图生成**：用于生成思维导图
+4. **嵌入向量**：用于文档向量化和检索
+5. **OCR**：用于试卷 / PDF 图片识别
 
-每个场景可以独立配置：暂时只支持硅基流动提供的模型，每人有免费的使用额度(https://siliconflow.cn/)
+当前主要支持硅基流动提供的 OpenAI 兼容接口，每人有免费的使用额度(https://siliconflow.cn/)
 (ps:项目调试过程token消耗太大，各位填个邀请码(aSxiQo98)或进入邀请链接(https://cloud.siliconflow.cn/i/aSxiQo98/) 实名认证后可以让作者回血，十分感谢🙏)
-- **模型**：选择对应的模型（如 DeepSeek-V3.2-Exp、Qwen2.5-VL-7B-Instruct 等）
-- **API Key**：输入对应的 API Key（加密存储，不会明文保存）
+
+- **统一 API Key**：只需配置一次，知识图谱、聊天、思维导图、嵌入向量、OCR 等场景会共用该 Key。
+- **模型**：每个场景可以选择不同模型（如 DeepSeek-V3.2-Exp、Qwen2.5-VL-7B-Instruct、Qwen3-Embedding 等）。
+- **模型列表同步**：保存统一 API Key 后，后端会调用 `GET /models` 拉取当前账号可用模型，并更新设置页中的模型下拉列表。
+- **启动自动同步**：后端启动时如果已经保存过统一 API Key，会自动刷新一次模型列表；刷新失败不会阻止应用启动。
+- **手动刷新**：设置页提供「刷新模型列表」按钮，可以在模型权限变化后手动同步。
+- **安全存储**：API Key 会在后端加密保存，不会通过配置查询接口明文返回。
 
 **首次使用**：
-- 如果未配置 LLM API Key，系统会提示错误
-- 请先获取硅基流动的 API Key，然后通过前端设置界面进行配置
+- 如果未配置统一 API Key，涉及 LLM / Embedding / OCR 的功能会提示错误。
+- 请先获取硅基流动的 API Key，然后在前端设置页顶部保存统一 Key。
+- 保存成功后，检查模型列表是否刷新成功，再为各场景选择合适模型。
 
----
+相关后端接口：
 
-## 启动应用
-
-### 部署（Docker）
-
-```bash
-docker compose up -d
-```
-
-### 开发（本地）
-
-**PowerShell:**
-```powershell
-.\start_all.ps1
-```
-
-这会自动启动：
-- 后端服务：http://localhost:8000
-- 前端应用：http://localhost:5173
+- `GET /api/settings/llm-config`：读取场景配置、统一 Key 状态和模型列表。
+- `POST /api/settings/providers/siliconflow/api-key`：保存统一 API Key，并尝试刷新模型列表。
+- `POST /api/settings/providers/siliconflow/models/refresh`：手动刷新模型列表。
 
 ## 访问地址
 
@@ -197,7 +220,8 @@ docker compose up -d
   - 默认写入文件：`backend/logs/app.log`（首次启动时自动创建 `logs/` 目录）。
   - 日志级别由 `settings.debug` 控制：开发环境使用 `DEBUG`，否则为 `INFO`。
 - **访问日志（HTTP 请求）**
-  - 由 uvicorn 自身输出，启动命令可通过 `--no-access-log` 关闭访问日志（例如 `start_all.ps1` 中已启用）。
+  - 由 uvicorn 自身输出，启动命令可通过 `--no-access-log` 关闭访问日志。
+  - 使用 `./start_all.sh` 启动时，macOS 会在弹出的 Terminal 窗口中显示日志；Linux 会写入 `logs/backend.log` 和 `logs/frontend.log`。
   - 如需持久化访问日志，可在启动脚本中使用重定向或 uvicorn 自带的 `--log-config` 能力，和应用日志解耦管理。
 
 ## 主要功能
@@ -232,6 +256,12 @@ docker compose up -d
   - 引用来源展示
   - 多对话记忆独立
   - 不同subjec独立工作空间
+
+- **Cheatsheet 速查表**
+  - 基于当前 subject 下已处理完成的 PDF / PPTX 讲义生成可打印 Markdown 速查表
+  - 支持纸张、方向、字号、行高、具体页边距、分栏、语言、密度和生成风格配置
+  - 支持流式生成、真实分页预览、编辑保存、复制 Markdown 和后端 PDF 导出
+  - 详细说明见 [docs/feature/feature-cheatsheet-generation.md](./docs/feature/feature-cheatsheet-generation.md)
 
 ### 3. 试题分析
 

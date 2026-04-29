@@ -1,11 +1,9 @@
 """图片渲染工具：将PDF和PPTX转换为图片"""
-import os
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 from datetime import datetime, timedelta
 from threading import Lock
-from PIL import Image
 import pdfplumber
 
 # 全局 PowerPoint 应用实例管理
@@ -40,6 +38,10 @@ class ImageRenderer:
         """
         suffix = "_thumb" if is_thumbnail else ""
         return self.cache_dir / file_extension / file_id / f"slide_{slide_number}{suffix}.png"
+
+    def _get_pptx_pdf_cache_path(self, file_id: str) -> Path:
+        """获取 PPTX 转换后的 PDF 缓存路径。"""
+        return self.cache_dir / "pptx" / file_id / "converted.pdf"
     
     def _is_cache_valid(self, cache_path: Path) -> bool:
         """检查缓存是否有效
@@ -87,30 +89,32 @@ class ImageRenderer:
             return cache_path
         
         try:
-            # 渲染PDF页面
-            with pdfplumber.open(file_path) as pdf:
-                if page_number < 1 or page_number > len(pdf.pages):
-                    return None
-                
-                page = pdf.pages[page_number - 1]
-                
-                # 生成图片
-                if is_thumbnail:
-                    # 缩略图使用较低分辨率
-                    img = page.to_image(resolution=72)
-                else:
-                    img = page.to_image(resolution=self.resolution)
-                
-                # 确保缓存目录存在
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                
-                # 保存图片
-                img.save(cache_path, format="PNG", optimize=True)
-                
-                return cache_path
+            return self._render_pdf_page_to_cache(file_path, page_number, cache_path, is_thumbnail)
         except Exception as e:
             print(f"Error rendering PDF page {page_number}: {e}")
             return None
+
+    def _render_pdf_page_to_cache(
+        self,
+        pdf_path: str,
+        page_number: int,
+        cache_path: Path,
+        is_thumbnail: bool = False
+    ) -> Optional[Path]:
+        """将 PDF 指定页渲染到给定缓存路径。"""
+        with pdfplumber.open(pdf_path) as pdf:
+            if page_number < 1 or page_number > len(pdf.pages):
+                print(f"PDF page {page_number} not found. Only {len(pdf.pages)} pages available.")
+                return None
+
+            page = pdf.pages[page_number - 1]
+            resolution = 72 if is_thumbnail else self.resolution
+            img = page.to_image(resolution=resolution)
+
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            img.save(cache_path, format="PNG", optimize=True)
+
+            return cache_path
     
     def render_pptx_slide(
         self,
@@ -378,81 +382,29 @@ class ImageRenderer:
             图片文件路径（如果成功）
         """
         import subprocess
-        import tempfile
-        import shutil
         
-        # 检查LibreOffice是否安装
-        libreoffice_cmd = shutil.which("libreoffice")
+        # 检查 LibreOffice 是否安装；macOS App 安装通常不会把命令加入 PATH。
+        libreoffice_cmd = self._find_libreoffice_command()
         if not libreoffice_cmd:
-            print("Warning: LibreOffice not found. Please install LibreOffice for PPTX rendering on Linux/Mac.")
-            print("Install: Ubuntu/Debian: sudo apt-get install libreoffice")
-            print("        CentOS/RHEL: sudo yum install libreoffice")
-            print("        macOS: brew install --cask libreoffice")
+            print("Warning: LibreOffice not found. PPTX preview rendering requires LibreOffice on Linux/macOS.")
+            print("Install: macOS: download LibreOffice from https://www.libreoffice.org/download/download-libreoffice/")
+            print("        Ubuntu/Debian: sudo apt-get install libreoffice")
             return None
         
         try:
-            # 创建临时目录用于LibreOffice输出
-            with tempfile.TemporaryDirectory() as temp_dir:
-                temp_output_dir = Path(temp_dir)
-                
-                # LibreOffice命令：转换为PNG
-                cmd = [
-                    libreoffice_cmd,
-                    "--headless",
-                    "--convert-to", "png",
-                    "--outdir", str(temp_output_dir),
-                    str(Path(file_path).absolute())
-                ]
-                
-                # 执行转换
-                result = subprocess.run(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=60,
-                    check=False
-                )
-                
-                if result.returncode != 0:
-                    print(f"LibreOffice conversion failed: {result.stderr.decode('utf-8', errors='ignore')}")
-                    return None
-                
-                # 查找生成的PNG文件
-                base_name = Path(file_path).stem
-                png_files = list(temp_output_dir.glob("*.png"))
-                
-                if not png_files:
-                    print(f"No PNG files generated by LibreOffice in {temp_output_dir}")
-                    return None
-                
-                # 找到对应幻灯片的PNG文件
-                if slide_number <= len(png_files):
-                    png_files_sorted = sorted(png_files, key=lambda x: x.name)
-                    source_file = png_files_sorted[slide_number - 1]
-                else:
-                    print(f"Slide {slide_number} not found. Only {len(png_files)} slides generated.")
-                    return None
-                
-                # 确保缓存目录存在
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                
-                # 如果目标文件已存在，先删除
-                if cache_path.exists():
-                    cache_path.unlink()
-                
-                # 如果是缩略图，需要调整大小
-                if is_thumbnail and source_file.exists():
-                    with Image.open(source_file) as img:
-                        img.thumbnail((200, 150), Image.Resampling.LANCZOS)
-                        img.save(cache_path, format="PNG", optimize=True)
-                else:
-                    # 直接复制文件
-                    shutil.copy2(source_file, cache_path)
-                
-                return cache_path if cache_path.exists() else None
+            pdf_cache_path = self._ensure_pptx_pdf_cache(file_path, file_id, libreoffice_cmd)
+            if not pdf_cache_path:
+                return None
+
+            return self._render_pdf_page_to_cache(
+                str(pdf_cache_path),
+                slide_number,
+                cache_path,
+                is_thumbnail
+            )
                 
         except subprocess.TimeoutExpired:
-            print(f"LibreOffice conversion timeout after 60s for slide {slide_number}")
+            print(f"LibreOffice conversion timeout after 60s for {file_path}")
             return None
         except FileNotFoundError:
             print("LibreOffice not found. Please install LibreOffice.")
@@ -460,6 +412,79 @@ class ImageRenderer:
         except Exception as e:
             print(f"Error rendering PPTX slide {slide_number} with LibreOffice: {e}")
             return None
+
+    def _ensure_pptx_pdf_cache(
+        self,
+        file_path: str,
+        file_id: str,
+        libreoffice_cmd: str
+    ) -> Optional[Path]:
+        """将 PPTX 转为 PDF 并缓存，避免 LibreOffice 直接转 PNG 只导出第一页。"""
+        import subprocess
+        import tempfile
+        import shutil
+
+        source_path = Path(file_path).absolute()
+        pdf_cache_path = self._get_pptx_pdf_cache_path(file_id)
+
+        if pdf_cache_path.exists() and pdf_cache_path.stat().st_mtime >= source_path.stat().st_mtime:
+            return pdf_cache_path
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_output_dir = Path(temp_dir)
+            cmd = [
+                libreoffice_cmd,
+                "--headless",
+                "--convert-to", "pdf",
+                "--outdir", str(temp_output_dir),
+                str(source_path)
+            ]
+
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=60,
+                check=False
+            )
+
+            if result.returncode != 0:
+                print(f"LibreOffice PPTX to PDF conversion failed: {result.stderr.decode('utf-8', errors='ignore')}")
+                return None
+
+            pdf_files = sorted(temp_output_dir.glob("*.pdf"), key=lambda item: item.name)
+            if not pdf_files:
+                print(f"No PDF generated by LibreOffice in {temp_output_dir}")
+                return None
+
+            pdf_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_cache_path = pdf_cache_path.with_suffix(".tmp.pdf")
+            if temp_cache_path.exists():
+                temp_cache_path.unlink()
+            shutil.copy2(pdf_files[0], temp_cache_path)
+            temp_cache_path.replace(pdf_cache_path)
+
+        return pdf_cache_path
+
+    def _find_libreoffice_command(self) -> Optional[str]:
+        """查找 LibreOffice/soffice 可执行文件。"""
+        import shutil
+
+        for command in ("libreoffice", "soffice"):
+            executable = shutil.which(command)
+            if executable:
+                return executable
+
+        if sys.platform == "darwin":
+            mac_paths = [
+                "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+                str(Path.home() / "Applications/LibreOffice.app/Contents/MacOS/soffice"),
+            ]
+            for path in mac_paths:
+                if Path(path).exists():
+                    return path
+
+        return None
     
     def render_slide(
         self,
@@ -540,4 +565,3 @@ class ImageRenderer:
                 import shutil
                 shutil.rmtree(self.cache_dir)
                 self.cache_dir.mkdir(parents=True, exist_ok=True)
-

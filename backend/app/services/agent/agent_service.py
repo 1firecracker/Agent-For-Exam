@@ -38,6 +38,8 @@ from app.services.agent.tools.mindmap_tool import MINDMAP_TOOL
 from app.services.agent.tools.query_tool import QUERY_TOOL
 from app.services.agent.tools.list_documents_tool import LIST_DOCUMENTS_TOOL
 from app.services.agent.tools.read_tool import READ_TOOL
+from app.services.conversation_service import ConversationService
+from app.services.document_service import DocumentService
 from app.services.lightrag_service import LightRAGService
 from app.services.memory_service import MemoryService
 import app.config as config
@@ -77,7 +79,57 @@ class AgentService:
             },
         )
     
-    def _build_agent_system_prompt(self) -> str:
+    def _build_document_context(self, conversation_id: str, max_documents: int = 30) -> str:
+        """构建轻量文档上下文，减少为获取 filename/file_id 而调用 list_documents。"""
+        try:
+            conversation_service = ConversationService()
+            document_service = DocumentService()
+            conversation = conversation_service.get_conversation(conversation_id)
+            subject_id = conversation.get("subject_id") if conversation else None
+
+            if subject_id:
+                documents = document_service.list_documents_for_subject(subject_id)
+                scope_text = f"subject_id={subject_id}"
+            else:
+                documents = document_service.list_documents(conversation_id)
+                scope_text = f"conversation_id={conversation_id}"
+
+            if not documents:
+                return "当前可用文档：无。"
+
+            lines = [
+                "当前可用文档（自动注入，优先使用此处的 filename 与 file_id；不要仅为了获取文档列表而调用 list_documents）：",
+                f"范围：{scope_text}",
+            ]
+
+            visible_documents = documents[:max_documents]
+            for index, doc in enumerate(visible_documents, 1):
+                file_id = doc.get("file_id", "")
+                filename = doc.get("filename", "未知文件")
+                status = doc.get("status", "unknown")
+                file_type = doc.get("file_type") or doc.get("file_extension") or ""
+                lines.append(
+                    f"{index}. file_id={file_id} | filename={filename} | status={status} | type={file_type}"
+                )
+
+            if len(documents) > max_documents:
+                lines.append(
+                    f"... 还有 {len(documents) - max_documents} 个文档未注入；如确需完整列表再调用 list_documents。"
+                )
+
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.warning(
+                "构建 Agent 文档上下文失败",
+                extra={
+                    "event": "agent.document_context_failed",
+                    "conversation_id": conversation_id,
+                    "error_message": str(exc),
+                },
+            )
+            return "当前可用文档：读取失败；如任务需要文档列表，可调用 list_documents。"
+
+    def _build_agent_system_prompt(self, document_context: str = "") -> str:
         """构建 Agent 系统提示词
         
         自动注入技能元数据（name + description）到 System Prompt，
@@ -98,14 +150,16 @@ class AgentService:
 
 {skills_snippet}
 
+{document_context}
+
 基本使用规则：
 1. 根据用户的需求，智能选择合适的工具
-2. 如果用户明确要求执行某个操作（如"生成思维导图"、"画脑图"等），使用 generate_mindmap 工具, 若指名具体文档, 需要注意应该查询文档列表并注入文档参数
+2. 如果用户明确要求执行某个操作（如"生成思维导图"、"画脑图"等），使用 generate_mindmap 工具；若指名具体文档，优先使用上方自动注入的文档清单中的 file_id 作为 document_ids
 3. 如果用户想要获取课程/讲义等文档中的事实性信息：
    - 若已知道大概位置（已知具体文档名/页码范围/很明确的页码线索），**直接使用 read 工具**读取原文
    - 若不知道大概位置，先使用 query_knowledge_graph **仅用于缩小范围与定位候选页码/关键词**，然后必须再用 read 工具读取原文确认
-4. 如果用户想要查看文档列表（如"列出所有文档"、"显示文档"等），使用 list_documents 工具
-5. 如果用户要阅读某份文档的指定页码范围（如「读某文档第3页到第5页」），使用 read 工具，参数为文档名（filename）、起始页码（start_page）、终止页码（end_page）；文档名须与 list_documents 返回的 filename 完全一致
+4. 如果用户想要查看文档列表（如"列出所有文档"、"显示文档"等），使用 list_documents 工具；其他场景优先使用自动注入的文档清单，只有清单为空、疑似过期或需要完整列表时才调用 list_documents
+5. 如果用户要阅读某份文档的指定页码范围（如「读某文档第3页到第5页」），使用 read 工具，参数为文档名（filename）、起始页码（start_page）、终止页码（end_page）；文档名须与自动注入文档清单或 list_documents 返回的 filename 完全一致
 6. 不要向用户透露工具名称，用自然语言描述操作 仅在必要时调用工具 如果任务简单或已知答案，直接回答，无需调用工具
 7. **工具调用后，如果结果提示需要进一步操作，可以继续调用其他工具**
 8. **只有在完成所有必要的工具调用后，才生成最终回答**
@@ -133,7 +187,7 @@ class AgentService:
 
 工具调用示例：
 - 生成思维导图：调用 generate_mindmap，参数可以为空 {{}} 或指定文档 {{"document_ids": ["file_id1", "file_id2"]}}（不要包含 conversation_id）
-  **重要：document_ids 必须使用 file_id（文档ID），而不是 filename（文件名）。可以通过 list_documents 工具获取每个文档的 file_id。**
+  **重要：document_ids 必须使用 file_id（文档ID），而不是 filename（文件名）。优先从自动注入的文档清单获取 file_id。**
 - 查询知识图谱：调用 query_knowledge_graph，参数 {{"query": "用户的问题", "mode": "mix"}}（不要包含 conversation_id）
 - 阅读文档某几页：调用 read，参数 {{"filename": "文档名（与 list_documents 一致）", "start_page": 1, "end_page": 5}}（不要包含 conversation_id）
 
@@ -145,7 +199,7 @@ class AgentService:
 2. **filename（文件名）**：文档的显示名称，如 "01 - Introduction.pdf"
 3. **重要**：
    - 在调用工具时（如 generate_mindmap），document_ids 参数必须使用 file_id，不能使用 filename
-   - 如果不知道 file_id，先调用 list_documents 工具查看文档列表，每个文档都会显示其 file_id
+   - 如果不知道 file_id，先查看自动注入的文档清单；清单不可用时再调用 list_documents 工具查看文档列表
 
 二、文档页面引用格式
 当引用来自文档的具体页面或幻灯片时，必须在引用位置使用标准格式：`[[file_id|page_index]]`
@@ -200,7 +254,8 @@ class AgentService:
         functions = self.tool_registry.to_function_calling_format()
         
         # 2. 构建系统提示词
-        system_prompt = self._build_agent_system_prompt()
+        document_context = self._build_document_context(conversation_id)
+        system_prompt = self._build_agent_system_prompt(document_context=document_context)
         
         # 3. 获取历史对话
         if conversation_history is None:
@@ -1370,4 +1425,3 @@ class AgentService:
                             "type": "mindmap_content",
                             "content": mindmap_content
                         }
-

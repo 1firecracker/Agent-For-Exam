@@ -45,6 +45,27 @@ class LLMConfigUpdate(BaseModel):
     api_key: Optional[str] = None  # 可选，如果不提供则不更新
 
 
+class ProviderAPIKeyUpdate(BaseModel):
+    """统一服务商 API Key 更新请求"""
+    api_key: str
+
+
+def _get_merged_model_lists() -> Dict[str, list]:
+    """合并内置模型、远程同步模型和用户自定义模型。"""
+    custom_models = config_service.get_custom_models()
+    remote_models = config_service.get_remote_models()
+    merged_model_lists = {}
+
+    bindings = set(MODEL_LISTS.keys()) | set(remote_models.keys())
+    for binding in bindings:
+        default_models = MODEL_LISTS.get(binding, [])
+        remote_list = remote_models.get(binding, [])
+        custom_list = custom_models.get(binding, [])
+        merged_model_lists[binding] = list(dict.fromkeys(default_models + remote_list + custom_list))
+
+    return merged_model_lists
+
+
 @router.get("/llm-config")
 async def get_llm_config():
     """获取所有场景的 LLM 配置
@@ -53,16 +74,7 @@ async def get_llm_config():
         包含所有场景配置的字典，不包含 API Key
     """
     all_configs = config_service.get_all_configs()
-    
-    # 合并默认模型列表和自定义模型列表
-    custom_models = config_service.get_custom_models()
-    merged_model_lists = {}
-    
-    for binding, default_models in MODEL_LISTS.items():
-        custom_list = custom_models.get(binding, [])
-        # 合并列表并去重，保持默认模型在前
-        merged_list = list(dict.fromkeys(default_models + custom_list))
-        merged_model_lists[binding] = merged_list
+    merged_model_lists = _get_merged_model_lists()
     
     return {
         "knowledge_graph": all_configs["knowledge_graph"],
@@ -70,7 +82,8 @@ async def get_llm_config():
         "mindmap": all_configs["mindmap"],
         "embedding": all_configs.get("embedding", {}),
         "ocr": all_configs.get("ocr", {}),
-        "model_lists": merged_model_lists
+        "model_lists": merged_model_lists,
+        "providers": config_service.get_provider_status()
     }
 
 
@@ -117,39 +130,79 @@ async def update_llm_config(scene: str, config_data: LLMConfigUpdate):
         api_key=config_data.api_key
     )
     
-    # 返回更新后的配置和合并后的模型列表（不包含 API Key）
     all_configs = config_service.get_all_configs()
-    custom_models = config_service.get_custom_models()
-    
-    # 合并模型列表
-    merged_model_lists = {}
-    for binding, default_models in MODEL_LISTS.items():
-        custom_list = custom_models.get(binding, [])
-        merged_list = list(dict.fromkeys(default_models + custom_list))
-        merged_model_lists[binding] = merged_list
+    merged_model_lists = _get_merged_model_lists()
     
     updated_config = all_configs[scene]
     return {
         "status": "success",
         "message": f"{scene} 配置已更新并立即生效",
         "config": updated_config,
-        "model_lists": merged_model_lists
+        "model_lists": merged_model_lists,
+        "providers": config_service.get_provider_status()
     }
 
 
 @router.get("/model-lists")
 async def get_model_lists():
     """获取支持的模型列表（包含自定义模型）"""
-    custom_models = config_service.get_custom_models()
-    
-    # 合并默认模型列表和自定义模型列表
-    merged_model_lists = {}
-    for binding, default_models in MODEL_LISTS.items():
-        custom_list = custom_models.get(binding, [])
-        merged_list = list(dict.fromkeys(default_models + custom_list))
-        merged_model_lists[binding] = merged_list
-    
     return {
-        "model_lists": merged_model_lists
+        "model_lists": _get_merged_model_lists(),
+        "providers": config_service.get_provider_status()
     }
 
+
+@router.post("/providers/{binding}/api-key")
+async def update_provider_api_key(binding: str, payload: ProviderAPIKeyUpdate):
+    """更新统一服务商 API Key。"""
+    if binding != "siliconflow":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="目前仅支持 siliconflow 的统一 API Key"
+        )
+    if not payload.api_key.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="API Key 不能为空"
+        )
+
+    config_service.update_provider_api_key(binding, payload.api_key)
+
+    refresh_result = None
+    refresh_error = ""
+    try:
+        refresh_result = await config_service.refresh_provider_models(binding)
+    except Exception as exc:
+        refresh_error = str(exc)
+
+    return {
+        "status": "success",
+        "message": "统一 API Key 已更新",
+        "providers": config_service.get_provider_status(),
+        "model_lists": _get_merged_model_lists(),
+        "refresh": refresh_result,
+        "refresh_error": refresh_error
+    }
+
+
+@router.post("/providers/{binding}/models/refresh")
+async def refresh_provider_models(binding: str):
+    """手动刷新服务商模型列表。"""
+    if binding != "siliconflow":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="目前仅支持刷新 siliconflow 的模型列表"
+        )
+    try:
+        refresh_result = await config_service.refresh_provider_models(binding)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"刷新模型列表失败: {exc}")
+
+    return {
+        "status": "success",
+        "refresh": refresh_result,
+        "providers": config_service.get_provider_status(),
+        "model_lists": _get_merged_model_lists()
+    }

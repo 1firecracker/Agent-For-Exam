@@ -21,6 +21,8 @@
 - 实时流式响应显示
 - 工具调用可视化（思维导图生成、知识图谱查询等）
 - 工具执行进度显示
+- 支持基于当前 subject 下已完成 PDF / PPTX 讲义生成 Cheatsheet 速查表
+- 支持 Cheatsheet 真实分页预览、编辑保存、复制 Markdown 和 PDF 导出
 
 ### 2. 知识图谱（Graph）
 - 基于 LightRAG 构建的知识图谱可视化
@@ -41,9 +43,10 @@
 - 文档处理状态跟踪
 
 ### 5. 设置配置（Settings）
-- LLM 模型配置（支持 OpenAI、SiliconFlow、Ollama）
-- 嵌入向量模型配置
-- 前端统一配置管理
+- 统一 API Key 配置（当前主要面向 SiliconFlow）
+- 各场景模型选择：知识图谱、聊天、思维导图、嵌入向量、OCR
+- 可用模型列表展示和手动刷新
+- 前端统一配置状态管理
 
 ## 项目结构
 
@@ -82,10 +85,11 @@ frontend/
 ## 模块说明
 
 ### Chat 模块
-- **功能**：智能对话界面，支持 Agent 工具调用
+- **功能**：智能对话界面，支持 Agent 工具调用和 Cheatsheet 速查表生成
 - **组件**：`ChatView.vue`、`ToolCallInline.vue`
 - **Store**：`chatStore.js`（消息管理）、`conversationStore.js`（对话管理）
 - **Service**：`chatService.js`、`conversationService.js`
+- **Cheatsheet**：入口、配置弹窗、文档选择、SSE 读取、软换行清洗、真实分页预览、编辑保存和 PDF 导出都集中在 `ChatView.vue`；详细记录见 `../docs/feature/feature-cheatsheet-generation.md`
 
 ### Graph 模块
 - **功能**：知识图谱可视化展示
@@ -111,12 +115,29 @@ frontend/
 - **Store**：`settingsStore.js`
 - **Service**：`settingsService.js`
 
+当前设置页采用“统一 API Key + 分场景模型”的方式：
+
+- 顶部统一保存 SiliconFlow API Key。
+- 保存 Key 后，后端会自动调用模型服务的 `GET /models` 拉取当前账号可用模型。
+- 每个配置页签只负责选择该场景使用的模型，不再重复输入 API Key。
+- 可以点击「刷新模型列表」手动同步模型权限变化。
+- 前端只展示 Key 是否已配置，不会读取或展示明文 Key。
+
 ## 快速开始
 
 ### 环境要求
 
 - Node.js 16+
 - npm 或 yarn
+
+macOS 可先检查：
+
+```bash
+node --version
+npm --version
+```
+
+如果 `npm` 不存在，请先安装 Node.js。可以从 https://nodejs.org 下载 macOS 安装包；Homebrew 是可选方案，不是必须。
 
 ### 安装依赖
 
@@ -169,6 +190,27 @@ npm run preview
 VITE_API_BASE_URL=http://localhost:8000
 ```
 
+LLM API Key 不通过前端环境变量配置。启动应用后，在右上角设置页保存统一 API Key 即可。
+
+## 设置接口
+
+设置模块主要调用以下后端接口：
+
+```http
+GET  /api/settings/llm-config
+GET  /api/settings/model-lists
+POST /api/settings/llm-config/{scene}
+POST /api/settings/providers/siliconflow/api-key
+POST /api/settings/providers/siliconflow/models/refresh
+```
+
+`llm-config` 会返回：
+
+- `knowledge_graph`、`chat`、`mindmap`、`embedding`、`ocr`：各场景模型配置。
+- `model_lists.siliconflow`：内置模型、远程同步模型和自定义模型合并后的列表。
+- `providers.siliconflow.has_api_key`：统一 Key 是否已配置。
+- `providers.siliconflow.last_synced_at` / `last_error`：模型列表同步状态。
+
 ## 主要特性
 
 - ✅ 模块化架构，代码组织清晰
@@ -177,4 +219,3 @@ VITE_API_BASE_URL=http://localhost:8000
 - ✅ 工具调用可视化，清晰展示执行过程
 - ✅ 知识图谱交互式展示
 - ✅ 思维导图自动生成和导出
-

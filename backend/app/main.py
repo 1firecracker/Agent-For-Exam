@@ -61,8 +61,9 @@ app.include_router(exams.router)
 # 启动时加载配置
 @app.on_event("startup")
 async def startup_event():
-    """启动时加载配置"""
+    """启动时加载配置并尝试同步模型列表"""
     config_service.reload_all_configs()
+    await config_service.startup_refresh_models()
 
 @app.get("/")
 async def root():
