@@ -1,7 +1,7 @@
 /**
  * 设置服务 - API 调用
  */
-import axios from 'axios'
+import { api } from './api'
 
 const API_BASE = '/api/settings'
 
@@ -10,8 +10,7 @@ export const settingsService = {
    * 获取所有 LLM 配置
    */
   async getLLMConfig() {
-    const response = await axios.get(`${API_BASE}/llm-config`)
-    return response.data
+    return await api.get(`${API_BASE}/llm-config`)
   },
 
   /**
@@ -24,33 +23,29 @@ export const settingsService = {
    * @param {string} [config.api_key] - API Key（可选）
    */
   async updateLLMConfig(scene, config) {
-    const response = await axios.post(`${API_BASE}/llm-config/${scene}`, config)
-    return response.data
+    return await api.post(`${API_BASE}/llm-config/${scene}`, config)
   },
 
   /**
    * 更新统一服务商 API Key
    */
   async updateProviderAPIKey(binding, apiKey) {
-    const response = await axios.post(`${API_BASE}/providers/${binding}/api-key`, {
+    return await api.post(`${API_BASE}/providers/${binding}/api-key`, {
       api_key: apiKey
     })
-    return response.data
   },
 
   /**
    * 刷新服务商模型列表
    */
   async refreshProviderModels(binding) {
-    const response = await axios.post(`${API_BASE}/providers/${binding}/models/refresh`)
-    return response.data
+    return await api.post(`${API_BASE}/providers/${binding}/models/refresh`)
   },
 
   /**
    * 获取支持的模型列表
    */
   async getModelLists() {
-    const response = await axios.get(`${API_BASE}/model-lists`)
-    return response.data
+    return await api.get(`${API_BASE}/model-lists`)
   }
 }

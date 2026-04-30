@@ -1,7 +1,7 @@
 <template>
   <div class="chat-workspace">
     <!-- 对话区域（全屏） -->
-    <div class="chat-main" :style="{ marginRight: isPanelCollapsed ? '0' : `${sidebarWidth}px` }">
+    <div class="chat-main" :style="chatMainStyle">
       <!-- 消息列表区域 -->
       <div class="messages-container" ref="messagesContainer" @click="handleReferenceClick">
         <div v-if="messages.length === 0" class="empty-state">
@@ -178,14 +178,29 @@
       <!-- 底部输入区 -->
       <div class="input-area-wrapper">
         <div v-if="subjectId" class="chat-action-bar">
+          <div class="mobile-quick-actions">
+            <el-button size="small" @click="openMobilePanel('documents')">Documents</el-button>
+            <el-button v-if="!isExamAnalysisConversation" size="small" @click="openMobilePanel('mindmap')">Mind Map</el-button>
+            <el-button
+              v-if="!isExamAnalysisConversation"
+              size="small"
+              type="primary"
+              plain
+              :disabled="!canOpenCheatsheet"
+              @click="openCheatsheetDialog"
+            >
+              Cheatsheet
+            </el-button>
+          </div>
           <el-button
+            class="desktop-cheatsheet-trigger"
             type="primary"
             plain
             size="small"
             :disabled="!canOpenCheatsheet"
             @click="openCheatsheetDialog"
           >
-            Cheetsheet
+            Cheatsheet
           </el-button>
           <span class="chat-action-hint">{{ cheatsheetButtonHint }}</span>
         </div>
@@ -251,7 +266,7 @@
     <div 
       class="sidebar-panel" 
       :class="{ collapsed: isPanelCollapsed }"
-      :style="{ width: isPanelCollapsed ? '0' : `${sidebarWidth}px` }"
+      :style="sidebarPanelStyle"
     >
       <!-- 拖动调整大小的分隔条 -->
       <div 
@@ -264,8 +279,24 @@
       <div class="sidebar-toggle" @click="isPanelCollapsed = !isPanelCollapsed" :title="isPanelCollapsed ? '展开侧边栏' : '折叠侧边栏'">
         <el-icon><component :is="isPanelCollapsed ? ArrowLeft : ArrowRight" /></el-icon>
       </div>
+      <el-button
+        v-if="isMobileViewport && !isPanelCollapsed && activeTab === 'documents' && mobileReferenceCloseVisible"
+        class="mobile-document-close"
+        size="small"
+        circle
+        @click="closeMobilePanel"
+        title="关闭文档"
+      >
+        <el-icon><Close /></el-icon>
+      </el-button>
 
       <div class="sidebar-content" v-show="!isPanelCollapsed">
+        <div class="mobile-panel-header">
+          <span>{{ activePanelTitle }}</span>
+          <el-button size="small" circle @click="closeMobilePanel">
+            <el-icon><Close /></el-icon>
+          </el-button>
+        </div>
         <el-tabs v-model="activeTab" class="sidebar-tabs">
           <!-- 试题分析对话：习题解析进度 Tab（默认） -->
           <el-tab-pane v-if="isExamAnalysisConversation" label="习题解析" name="analysis">
@@ -401,8 +432,9 @@
     <el-dialog
       v-model="cheatsheetDialogVisible"
       title="Cheatsheet Preview"
-      width="92%"
-      top="4vh"
+      :width="isMobileViewport ? '100%' : '92%'"
+      :top="isMobileViewport ? '0' : '4vh'"
+      :fullscreen="isMobileViewport"
       class="cheatsheet-dialog"
       :close-on-click-modal="false"
     >
@@ -510,7 +542,8 @@
     <el-dialog
       v-model="cheatsheetDocumentDialogVisible"
       title="选择讲义范围"
-      width="560px"
+      :width="isMobileViewport ? '100%' : '560px'"
+      :fullscreen="isMobileViewport"
       append-to-body
       :close-on-click-modal="false"
     >
@@ -551,7 +584,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick, onMounted, watch, computed, provide } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted, watch, computed, provide } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Position, ArrowRight, ArrowLeft, Share, Edit, Close, Check, Loading } from '@element-plus/icons-vue'
@@ -601,6 +634,8 @@ const editingContent = ref('')
 const isPanelCollapsed = ref(false)
 const activeTab = ref('documents')
 const showGraphModal = ref(false)
+const isMobileViewport = ref(false)
+const mobileReferenceCloseVisible = ref(false)
 
 // 试题分析专属对话：右侧默认显示「习题解析进度」
 const isExamAnalysisConversation = computed(() => convStore.currentConversation?.conversation_type === 'exam_analysis')
@@ -620,6 +655,54 @@ const sidebarWidth = ref(getDefaultSidebarWidth())
 const isResizing = ref(false)
 const minSidebarWidth = 300
 const maxSidebarWidth = 800
+const chatMainStyle = computed(() => ({
+  marginRight: isMobileViewport.value || isPanelCollapsed.value ? '0' : `${sidebarWidth.value}px`
+}))
+const sidebarPanelStyle = computed(() => ({
+  width: isPanelCollapsed.value ? '0' : (isMobileViewport.value ? '100vw' : `${sidebarWidth.value}px`)
+}))
+const activePanelTitle = computed(() => {
+  const titles = {
+    analysis: '习题解析',
+    documents: 'Documents',
+    mindmap: 'Mind Map',
+    cheatsheet: 'Cheatsheet'
+  }
+  return titles[activeTab.value] || 'Panel'
+})
+
+let mobileViewportQuery = null
+const updateMobileViewport = (event) => {
+  isMobileViewport.value = event.matches
+  if (event.matches) {
+    isPanelCollapsed.value = true
+    sidebarWidth.value = window.innerWidth
+  } else {
+    sidebarWidth.value = getDefaultSidebarWidth()
+  }
+}
+
+const openMobilePanel = (tab) => {
+  mobileReferenceCloseVisible.value = false
+  activeTab.value = tab
+  isPanelCollapsed.value = false
+}
+
+const closeMobilePanel = () => {
+  mobileReferenceCloseVisible.value = false
+  isPanelCollapsed.value = true
+}
+
+const openCheatsheetPreviewPanel = async () => {
+  mobileReferenceCloseVisible.value = false
+  activeTab.value = 'cheatsheet'
+  if (isPanelCollapsed.value) {
+    isPanelCollapsed.value = false
+  }
+  await nextTick()
+  recomputeCheatsheetScale()
+  await recomputeCheatsheetPages()
+}
 
 // Think 内容折叠状态
 const thinkCollapseStates = ref([])
@@ -1007,6 +1090,16 @@ const cheatsheetFlowMeasureStyle = computed(() => ({
   overflowY: 'hidden'
 }))
 
+const blobToBase64 = (blob) => new Promise((resolve, reject) => {
+  const reader = new FileReader()
+  reader.onloadend = () => {
+    const result = String(reader.result || '')
+    resolve(result.includes(',') ? result.split(',').pop() : result)
+  }
+  reader.onerror = reject
+  reader.readAsDataURL(blob)
+})
+
 const downloadCheatsheetPdf = async () => {
   if (!conversationId.value) return
   try {
@@ -1040,10 +1133,18 @@ const downloadCheatsheetPdf = async () => {
     }
 
     const blob = await response.blob()
+    const filename = `cheatsheet-${conversationId.value}.pdf`
+    if (window.AndroidFileSaver?.savePdf) {
+      const base64 = await blobToBase64(blob)
+      window.AndroidFileSaver.savePdf(base64, filename)
+      ElMessage.success('PDF 已生成，正在打开系统处理器')
+      return
+    }
+
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `cheatsheet-${conversationId.value}.pdf`
+    a.download = filename
     document.body.appendChild(a)
     a.click()
     a.remove()
@@ -1137,6 +1238,10 @@ onMounted(() => {
   recomputeCheatsheetScale()
 })
 
+onUnmounted(() => {
+  cheatsheetResizeObserver?.disconnect()
+})
+
 watch(cheatsheetLayout, () => {
   recomputeCheatsheetScale()
 }, { deep: true })
@@ -1203,7 +1308,9 @@ const generateCheatsheet = async () => {
   cheatsheetGenerating.value = true
   cheatsheetContent.value = ''
   cheatsheetGenerationStatus.value = '准备生成 cheatsheet...'
-  activeTab.value = 'cheatsheet'
+  cheatsheetDialogVisible.value = false
+  cheatsheetDocumentDialogVisible.value = false
+  await openCheatsheetPreviewPanel()
 
   try {
     cheatsheetAbortController.value = new AbortController()
@@ -1269,8 +1376,7 @@ const generateCheatsheet = async () => {
       }
     }
 
-    cheatsheetDialogVisible.value = false
-    cheatsheetDocumentDialogVisible.value = false
+    await openCheatsheetPreviewPanel()
     ElMessage.success('Cheatsheet 生成完成')
   } catch (error) {
     if (error?.name === 'AbortError') {
@@ -2175,12 +2281,22 @@ const initializeConversation = async () => {
 }
 
 onMounted(async () => {
+  mobileViewportQuery = window.matchMedia('(max-width: 768px)')
+  updateMobileViewport(mobileViewportQuery)
+  mobileViewportQuery.addEventListener('change', updateMobileViewport)
+
   // 初始化侧边栏宽度为对话空间的60%
-  const leftSidebarWidth = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width')) || 260
-  const chatSpaceWidth = window.innerWidth - leftSidebarWidth
-  sidebarWidth.value = Math.floor(chatSpaceWidth * 0.6)
+  if (!isMobileViewport.value) {
+    const leftSidebarWidth = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width')) || 260
+    const chatSpaceWidth = window.innerWidth - leftSidebarWidth
+    sidebarWidth.value = Math.floor(chatSpaceWidth * 0.6)
+  }
   
   await initializeConversation()
+})
+
+onUnmounted(() => {
+  mobileViewportQuery?.removeEventListener('change', updateMobileViewport)
 })
 
 // 处理"载入解析数据"请求
@@ -2338,6 +2454,7 @@ watch(() => conversationId.value, async (newConvId, oldConvId) => {
 
 // 拖动调整侧边栏宽度
 const handleResizeStart = (e) => {
+  if (isMobileViewport.value) return
   e.preventDefault()
   isResizing.value = true
   
@@ -2484,12 +2601,18 @@ const parseReferences = (html, originalText = '') => {
 
 // 跳转到文档指定页码（由 PPTViewer 负责切文档 + 加载 + 跳页）
 const jumpToDocumentPage = async (fileId, page) => {
-  // 切换到 Documents 标签
-  activeTab.value = 'documents'
-  
-  // 如果侧边栏折叠，展开它
-  if (isPanelCollapsed.value) {
+  if (isMobileViewport.value) {
+    activeTab.value = 'documents'
+    mobileReferenceCloseVisible.value = true
     isPanelCollapsed.value = false
+  } else {
+    // 切换到 Documents 标签
+    activeTab.value = 'documents'
+    
+    // 如果侧边栏折叠，展开它
+    if (isPanelCollapsed.value) {
+      isPanelCollapsed.value = false
+    }
   }
   
   // 等待 DOM 更新，确保 PPTViewer 已挂载
@@ -2603,6 +2726,7 @@ const formatEnhancedMarkdown = (text) => {
   bottom: 0;
   width: calc(100vw - var(--sidebar-width, 260px)); /* 使用CSS变量，默认260px */
   height: 100vh;
+  height: 100dvh;
   display: flex;
   overflow: hidden;
   z-index: 1;
@@ -2908,6 +3032,11 @@ const formatEnhancedMarkdown = (text) => {
   align-items: center;
   gap: 10px;
   margin-bottom: 10px;
+}
+
+.mobile-quick-actions,
+.mobile-panel-header {
+  display: none;
 }
 
 .chat-action-hint {
@@ -3487,6 +3616,220 @@ const formatEnhancedMarkdown = (text) => {
   margin: 16px 0;
   overflow-x: auto;
   overflow-y: hidden;
+}
+
+@media (max-width: 768px) {
+  .chat-workspace {
+    left: 0;
+    width: 100vw;
+  }
+
+  .messages-container {
+    padding: calc(env(safe-area-inset-top, 0px) + 58px) 12px 12px;
+  }
+
+  .message-list {
+    gap: 12px;
+  }
+
+  .message-row {
+    gap: 8px;
+  }
+
+  .message-row.doc-message {
+    padding-left: 0;
+  }
+
+  .avatar {
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
+  }
+
+  .welcome-text {
+    max-width: 280px;
+    text-align: center;
+    font-size: 20px;
+  }
+
+  .input-area-wrapper {
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+    padding: 10px 12px calc(env(safe-area-inset-bottom, 0px) + 10px);
+    border-radius: 0;
+  }
+
+  .chat-action-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .mobile-quick-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .mobile-quick-actions .el-button {
+    margin-left: 0;
+    min-height: 34px;
+    padding: 6px 8px;
+  }
+
+  .desktop-cheatsheet-trigger {
+    display: none;
+  }
+
+  .chat-action-hint {
+    font-size: 11px;
+    line-height: 1.3;
+  }
+
+  .input-box {
+    padding: 10px 12px;
+  }
+
+  .chat-input {
+    max-height: 120px;
+    font-size: 16px;
+  }
+
+  .send-btn,
+  .stop-btn {
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+  }
+
+  .input-footer {
+    display: none;
+  }
+
+  .sidebar-panel {
+    position: fixed;
+    inset: 0;
+    min-width: 0;
+    width: 100vw !important;
+    max-width: none;
+    border-left: none;
+    z-index: 1150;
+    transition: transform 0.25s ease;
+  }
+
+  .sidebar-panel.collapsed {
+    transform: translateX(100%);
+    width: 0 !important;
+  }
+
+  .sidebar-resizer,
+  .sidebar-toggle {
+    display: none;
+  }
+
+  .mobile-document-close {
+    position: absolute;
+    top: calc(env(safe-area-inset-top, 0px) + 10px);
+    right: 12px;
+    z-index: 1205;
+    width: 38px;
+    height: 38px;
+    box-shadow: 0 8px 18px rgba(15, 23, 42, 0.14);
+  }
+
+  .mobile-panel-header {
+    height: calc(env(safe-area-inset-top, 0px) + 52px);
+    padding: env(safe-area-inset-top, 0px) 12px 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+    font-weight: 600;
+    background: var(--bg-card);
+  }
+
+  .sidebar-tabs :deep(.el-tabs__header) {
+    padding: 0 12px;
+    overflow-x: auto;
+  }
+
+  .sidebar-tabs :deep(.el-tabs__nav-wrap) {
+    overflow: visible;
+  }
+
+  .tab-content-wrapper,
+  .docs-panel {
+    min-height: 0;
+  }
+
+  .cheatsheet-panel {
+    padding: 12px;
+  }
+
+  .cheatsheet-panel-header {
+    gap: 8px;
+  }
+
+  .cheatsheet-panel-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cheatsheet-panel-actions .el-button {
+    margin-left: 0;
+  }
+
+  .cheatsheet-editor {
+    min-height: 360px;
+    font-size: 12px;
+  }
+
+  .cheatsheet-rendered,
+  .cheatsheet-preview-wrap {
+    padding: 12px;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .cheatsheet-dialog-body {
+    grid-template-columns: 1fr;
+    height: auto;
+    max-height: none;
+    overflow: auto;
+  }
+
+  .cheatsheet-config {
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .cheatsheet-config :deep(.el-select),
+  .cheatsheet-config :deep(.el-input),
+  .cheatsheet-config :deep(.el-textarea),
+  .cheatsheet-config :deep(.el-input-number) {
+    width: 100%;
+  }
+
+  .cheatsheet-margin-control {
+    grid-template-columns: 1fr;
+  }
+
+  .cheatsheet-dialog .cheatsheet-preview,
+  .cheatsheet-generated-wrap .cheatsheet-preview {
+    transform-origin: top left;
+  }
+
+  :global(.cheatsheet-dialog.is-fullscreen .el-dialog__body) {
+    height: calc(100dvh - 112px);
+    overflow: auto;
+    padding: 12px;
+  }
+
+  :global(.cheatsheet-dialog.is-fullscreen .el-dialog__footer) {
+    padding: 10px 12px calc(env(safe-area-inset-bottom, 0px) + 10px);
+  }
 }
 </style>
 

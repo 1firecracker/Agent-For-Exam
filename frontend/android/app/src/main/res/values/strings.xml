@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Agent For Exam</string>
+    <string name="title_activity_main">Agent For Exam</string>
+    <string name="package_name">com.firecracker.agentforexam</string>
+    <string name="custom_url_scheme">com.firecracker.agentforexam</string>
+</resources>

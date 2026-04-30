@@ -3,6 +3,13 @@ import { ElMessage } from 'element-plus'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 
+const resolveApiUrl = (path) => {
+  if (!path) return BASE_URL
+  if (/^https?:\/\//i.test(path)) return path
+  if (!BASE_URL) return path
+  return `${BASE_URL.replace(/\/$/, '')}/${String(path).replace(/^\//, '')}`
+}
+
 // 创建 axios 实例
 const api = axios.create({
   baseURL: BASE_URL,
@@ -100,4 +107,4 @@ api.interceptors.response.use(
   }
 )
 
-export { api, BASE_URL }
+export { api, BASE_URL, resolveApiUrl }

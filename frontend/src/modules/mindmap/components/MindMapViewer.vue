@@ -109,7 +109,8 @@
     <el-dialog
       v-model="fullscreenVisible"
       title="思维脑图 - 全屏视图"
-      width="95%"
+      :width="isMobileViewport ? '100%' : '95%'"
+      :fullscreen="isMobileViewport"
       :close-on-click-modal="false"
       :close-on-press-escape="true"
       class="mindmap-fullscreen-dialog"
@@ -137,6 +138,7 @@ const mindmapContainer = ref(null)
 const fullscreenContainer = ref(null)
 const fullscreenVisible = ref(false)
 const generationProgress = ref(0)
+const isMobileViewport = ref(false)
 
 const markmapInstance = ref(null)
 let fullscreenMarkmapInstance = null
@@ -145,6 +147,30 @@ let renderRAFId = null
 let skipNextRender = false
 const processingDocs = new Set()
 const expandMode = ref('default')
+let mobileViewportQuery = null
+let mindmapResizeObserver = null
+let fitRAFId = null
+
+const scheduleFit = () => {
+  if (fitRAFId) {
+    cancelAnimationFrame(fitRAFId)
+  }
+  fitRAFId = requestAnimationFrame(() => {
+    try {
+      markmapInstance.value?.fit?.()
+      fullscreenMarkmapInstance?.fit?.()
+    } catch (error) {
+      console.warn('思维脑图自适应失败（已忽略）:', error)
+    } finally {
+      fitRAFId = null
+    }
+  })
+}
+
+const updateMobileViewport = (event) => {
+  isMobileViewport.value = event.matches
+  scheduleFit()
+}
 
 let transformer = null
 const getTransformer = () => {
@@ -166,6 +192,9 @@ const getTransformer = () => {
 const renderMindMap = async (container, content) => {
   if (!container || !content) {
     return
+  }
+  if (mindmapResizeObserver) {
+    mindmapResizeObserver.observe(container)
   }
   
   if (!Markmap) {
@@ -305,6 +334,7 @@ const renderMindMap = async (container, content) => {
         if (typeof instance.fit === 'function') {
           instance.fit()
         }
+        scheduleFit()
         if (!mindmapStore.generating) {
           console.log('✅ 思维脑图数据更新成功')
         }
@@ -831,10 +861,22 @@ const handleFullscreen = async () => {
   if (fullscreenContainer.value && mindmapStore.mindmapContent) {
     await renderMindMap(fullscreenContainer.value, mindmapStore.mindmapContent)
   }
+  scheduleFit()
 }
 
 onMounted(async () => {
   console.log('🔄 MindMapViewer 组件挂载')
+  mobileViewportQuery = window.matchMedia('(max-width: 768px)')
+  updateMobileViewport(mobileViewportQuery)
+  mobileViewportQuery.addEventListener('change', updateMobileViewport)
+
+  if (typeof ResizeObserver !== 'undefined') {
+    mindmapResizeObserver = new ResizeObserver(() => scheduleFit())
+    if (mindmapContainer.value) {
+      mindmapResizeObserver.observe(mindmapContainer.value)
+    }
+  }
+
   if (convStore.currentConversationId) {
     console.log('🔄 组件挂载，自动加载思维脑图，对话ID:', convStore.currentConversationId)
     try {
@@ -863,6 +905,11 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  mobileViewportQuery?.removeEventListener('change', updateMobileViewport)
+  mindmapResizeObserver?.disconnect()
+  if (fitRAFId) {
+    cancelAnimationFrame(fitRAFId)
+  }
   if (markmapInstance.value) {
     markmapInstance.value = null
   }
@@ -956,6 +1003,8 @@ onUnmounted(() => {
   background-color: #fff;
   font-size: 0;
   line-height: 0;
+  overscroll-behavior: contain;
+  touch-action: none;
 }
 
 .mindmap-canvas.generating {
@@ -976,6 +1025,63 @@ onUnmounted(() => {
   gap: 12px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   border-radius: 0 0 8px 8px;
+}
+
+@media (max-width: 768px) {
+  .mindmap-viewer-card {
+    border: none;
+    border-radius: 0;
+  }
+
+  .mindmap-viewer-card :deep(.el-card__header) {
+    padding: 10px 12px;
+  }
+
+  .viewer-header {
+    align-items: flex-start;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .header-left {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .header-left h3 {
+    font-size: 15px;
+  }
+
+  .header-right {
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .header-right .el-button {
+    width: 36px;
+    height: 36px;
+  }
+
+  .mindmap-container,
+  .mindmap-wrapper,
+  .mindmap-canvas {
+    min-height: calc(100dvh - 150px);
+  }
+
+  .generating-overlay {
+    padding: 12px;
+  }
+
+  :global(.mindmap-fullscreen-dialog.is-fullscreen .el-dialog__body) {
+    height: calc(100dvh - 54px);
+    padding: 0;
+  }
+
+  .fullscreen-mindmap-container {
+    height: 100% !important;
+    min-height: 100% !important;
+  }
 }
 
 .mindmap-canvas :deep(svg) {
@@ -1011,6 +1117,3 @@ onUnmounted(() => {
   min-height: 600px;
 }
 </style>
-
-
-

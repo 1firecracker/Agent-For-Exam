@@ -10,6 +10,10 @@
         :class="{ 'current-slide': slide.slide_number === currentSlideNumber }"
         @click="onSlideClick(slide.slide_number)"
         @dblclick="handleSlideDblClick($event, slide, index)"
+        @touchstart="handleSlideTouchStart($event, slide, index)"
+        @touchmove="handleSlideTouchMove"
+        @touchend="handleSlideTouchEnd"
+        @touchcancel="handleSlideTouchEnd"
       >
         <div class="slide-content">
           <div
@@ -116,6 +120,9 @@ const bubbleState = ref({
 // 防止双击后的 click 事件关闭气泡菜单
 const doubleClickTimeout = ref(null)
 const isDoubleClicking = ref(false)
+const longPressTimeout = ref(null)
+const longPressStart = ref(null)
+const longPressTriggered = ref(false)
 
 const getSlideImageUrl = (slideNumber) => {
   if (!props.fileId || !slideNumber) return ''
@@ -166,14 +173,75 @@ const onSlideClick = (slideNumber) => {
 }
 
 
+const clampBubblePosition = (x, y) => {
+  const viewer = slideViewerRef.value
+  if (!viewer) return { x, y }
+
+  const visibleLeft = viewer.scrollLeft
+  const visibleTop = viewer.scrollTop
+  const visibleRight = visibleLeft + viewer.clientWidth
+  const visibleBottom = visibleTop + viewer.clientHeight
+  const halfMenuWidth = 92
+  const menuHeight = 110
+  const minX = visibleLeft + halfMenuWidth
+  const maxX = Math.max(minX, visibleRight - halfMenuWidth)
+  const minY = visibleTop + menuHeight
+  const maxY = Math.max(minY, visibleBottom - 12)
+
+  return {
+    x: Math.min(Math.max(x, minX), maxX),
+    y: Math.min(Math.max(y, minY), maxY)
+  }
+}
+
+const showBubbleMenuAtPoint = (clientX, clientY, slide, slideIndex) => {
+  if (!slide || !props.fileId) {
+    return
+  }
+
+  // 获取被点击的 slide-item 元素
+  const slideItem = slideRefs.value[slideIndex]
+  const slideViewer = slideViewerRef.value
+  
+  if (!slideItem || !slideViewer) {
+    return
+  }
+  
+  // 获取 slide-item 相对于 slide-viewer 的位置
+  const slideItemRect = slideItem.getBoundingClientRect()
+  const slideViewerRect = slideViewer.getBoundingClientRect()
+  
+  // 计算点击位置相对于 slide-item 的坐标
+  const relativeX = clientX - slideItemRect.left
+  const relativeY = clientY - slideItemRect.top
+  
+  // 计算 slide-item 相对于 slide-viewer 的位置（考虑滚动）
+  const slideViewerScrollLeft = slideViewer.scrollLeft || 0
+  const slideViewerScrollTop = slideViewer.scrollTop || 0
+  const slideItemOffsetX = slideItemRect.left - slideViewerRect.left + slideViewerScrollLeft
+  const slideItemOffsetY = slideItemRect.top - slideViewerRect.top + slideViewerScrollTop
+  
+  // 最终坐标 = slide-item 在 slide-viewer 中的位置 + 点击在 slide-item 中的相对位置
+  const position = clampBubblePosition(
+    slideItemOffsetX + relativeX,
+    slideItemOffsetY + relativeY
+  )
+  
+  // 更新气泡状态
+  bubbleState.value = {
+    visible: true,
+    x: position.x,
+    y: position.y,
+    fileId: props.fileId,
+    filename: props.filename || '',
+    pageNumber: slide.slide_number
+  }
+}
+
 // 处理双击事件
 const handleSlideDblClick = (event, slide, slideIndex) => {
   event.stopPropagation()
   event.preventDefault()
-  
-  if (!slide || !props.fileId) {
-    return
-  }
   
   // 设置双击标志
   isDoubleClicking.value = true
@@ -189,48 +257,59 @@ const handleSlideDblClick = (event, slide, slideIndex) => {
     doubleClickTimeout.value = null
     isDoubleClicking.value = false
   }, 500)
-  
-  // 获取被点击的 slide-item 元素
-  const slideItem = slideRefs.value[slideIndex]
-  const slideViewer = slideViewerRef.value
-  
-  if (!slideItem || !slideViewer) {
-    return
+
+  showBubbleMenuAtPoint(event.clientX, event.clientY, slide, slideIndex)
+}
+
+const clearLongPressTimer = () => {
+  if (longPressTimeout.value) {
+    clearTimeout(longPressTimeout.value)
+    longPressTimeout.value = null
   }
-  
-  // 获取 slide-item 相对于 slide-viewer 的位置
-  const slideItemRect = slideItem.getBoundingClientRect()
-  const slideViewerRect = slideViewer.getBoundingClientRect()
-  
-  // 计算点击位置相对于 slide-item 的坐标
-  const relativeX = event.clientX - slideItemRect.left
-  const relativeY = event.clientY - slideItemRect.top
-  
-  // 计算 slide-item 相对于 slide-viewer 的位置（考虑滚动）
-  const slideViewerScrollLeft = slideViewer.scrollLeft || 0
-  const slideViewerScrollTop = slideViewer.scrollTop || 0
-  const slideItemOffsetX = slideItemRect.left - slideViewerRect.left + slideViewerScrollLeft
-  const slideItemOffsetY = slideItemRect.top - slideViewerRect.top + slideViewerScrollTop
-  
-  // 最终坐标 = slide-item 在 slide-viewer 中的位置 + 点击在 slide-item 中的相对位置
-  const x = slideItemOffsetX + relativeX
-  const y = slideItemOffsetY + relativeY
-  
-  // 更新气泡状态
-  bubbleState.value = {
-    visible: true,
-    x,
-    y,
-    fileId: props.fileId,
-    filename: props.filename || '',
-    pageNumber: slide.slide_number
+}
+
+const handleSlideTouchStart = (event, slide, slideIndex) => {
+  if (event.touches.length !== 1) return
+  const touch = event.touches[0]
+  longPressStart.value = {
+    x: touch.clientX,
+    y: touch.clientY
+  }
+  longPressTriggered.value = false
+  clearLongPressTimer()
+  longPressTimeout.value = setTimeout(() => {
+    longPressTriggered.value = true
+    isDoubleClicking.value = true
+    showBubbleMenuAtPoint(touch.clientX, touch.clientY, slide, slideIndex)
+    doubleClickTimeout.value = setTimeout(() => {
+      doubleClickTimeout.value = null
+      isDoubleClicking.value = false
+      longPressTriggered.value = false
+    }, 650)
+  }, 550)
+}
+
+const handleSlideTouchMove = (event) => {
+  if (!longPressStart.value || event.touches.length !== 1) return
+  const touch = event.touches[0]
+  const moved = Math.hypot(touch.clientX - longPressStart.value.x, touch.clientY - longPressStart.value.y)
+  if (moved > 12) {
+    clearLongPressTimer()
+  }
+}
+
+const handleSlideTouchEnd = (event) => {
+  clearLongPressTimer()
+  longPressStart.value = null
+  if (longPressTriggered.value && event.cancelable) {
+    event.preventDefault()
   }
 }
 
 // 处理容器点击（关闭气泡）
 const handleContainerClick = (event) => {
   // 如果正在双击或双击后的短暂时间内，忽略 click 事件（防止关闭气泡菜单）
-  if (isDoubleClicking.value || doubleClickTimeout.value) {
+  if (isDoubleClicking.value || doubleClickTimeout.value || longPressTriggered.value) {
     return
   }
   
@@ -320,6 +399,7 @@ onUnmounted(() => {
   if (doubleClickTimeout.value) {
     clearTimeout(doubleClickTimeout.value)
   }
+  clearLongPressTimer()
   if (observer) {
     observer.disconnect()
     observer = null
@@ -472,6 +552,38 @@ watch(() => props.currentSlideNumber, (newNumber) => {
   font-size: 16px;
   color: #409eff;
 }
+
+@media (max-width: 768px) {
+  .slide-viewer {
+    padding: 10px;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .slide-container {
+    gap: 12px;
+  }
+
+  .slide-item {
+    padding: 6px 0;
+    touch-action: pan-y;
+  }
+
+  .slide-image {
+    max-width: 100%;
+    border-radius: 3px;
+  }
+
+  .bubble-menu {
+    min-width: 176px;
+    max-width: calc(100vw - 24px);
+    transform: translate(-50%, -100%);
+  }
+
+  .bubble-menu-item {
+    min-height: 42px;
+    padding: 11px 16px;
+    font-size: 14px;
+  }
+}
 </style>
-
-

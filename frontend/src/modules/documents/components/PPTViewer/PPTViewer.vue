@@ -7,7 +7,7 @@
             <el-select
               v-model="selectedFileId"
               placeholder="选择文档（PPTX/PDF）"
-              style="width: 300px"
+              class="document-select"
               @change="handleFileChange"
               :loading="loading"
             >
@@ -376,6 +376,10 @@ onUnmounted(() => {
   min-width: 320px;
 }
 
+.document-select {
+  width: 300px;
+}
+
 .header-right {
   display: flex;
   align-items: center;
@@ -426,6 +430,40 @@ onUnmounted(() => {
 }
 
 @media (max-width: 768px) {
+  .viewer-card {
+    border: none;
+    border-radius: 0;
+  }
+
+  .viewer-card :deep(.el-card__header) {
+    padding: 8px 10px;
+  }
+
+  .viewer-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 0;
+  }
+
+  .header-left {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .document-select {
+    width: 100%;
+  }
+
+  .header-right {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .header-right .el-button {
+    min-height: 34px;
+  }
+
   .sidebar {
     position: absolute;
     left: 0;
@@ -441,5 +479,4 @@ onUnmounted(() => {
   }
 }
 </style>
-
 

@@ -1,4 +1,4 @@
-import { api } from '../../../services/api'
+import { api, resolveApiUrl } from '../../../services/api'
 
 class DocumentService {
   async uploadDocuments(conversationId, files, onProgress) {
@@ -65,11 +65,11 @@ class DocumentService {
   }
 
   getSlideImageUrl(conversationId, fileId, slideId, useCache = true) {
-    return `/api/conversations/${conversationId}/documents/${fileId}/slides/${slideId}/image?use_cache=${useCache}`
+    return resolveApiUrl(`/api/conversations/${conversationId}/documents/${fileId}/slides/${slideId}/image?use_cache=${useCache}`)
   }
 
   getSlideThumbnailUrl(conversationId, fileId, slideId, useCache = true) {
-    return `/api/conversations/${conversationId}/documents/${fileId}/slides/${slideId}/thumbnail?use_cache=${useCache}`
+    return resolveApiUrl(`/api/conversations/${conversationId}/documents/${fileId}/slides/${slideId}/thumbnail?use_cache=${useCache}`)
   }
 
   // ========== 按 subjectId 操作文档的方法 ==========
@@ -138,14 +138,13 @@ class DocumentService {
   }
 
   getSlideImageUrlForSubject(subjectId, fileId, slideId, useCache = true) {
-    return `/api/subjects/${subjectId}/documents/${fileId}/slides/${slideId}/image?use_cache=${useCache}`
+    return resolveApiUrl(`/api/subjects/${subjectId}/documents/${fileId}/slides/${slideId}/image?use_cache=${useCache}`)
   }
 
   getSlideThumbnailUrlForSubject(subjectId, fileId, slideId, useCache = true) {
-    return `/api/subjects/${subjectId}/documents/${fileId}/slides/${slideId}/thumbnail?use_cache=${useCache}`
+    return resolveApiUrl(`/api/subjects/${subjectId}/documents/${fileId}/slides/${slideId}/thumbnail?use_cache=${useCache}`)
   }
 }
 
 export default new DocumentService()
-
 

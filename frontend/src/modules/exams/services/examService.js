@@ -2,7 +2,7 @@
  * 试卷管理 API 服务
  * 对应后端: backend/app/api/exams.py
  */
-import axios from 'axios'
+import { api } from '../../../services/api'
 
 const API_BASE = '/api/exams'
 
@@ -21,7 +21,7 @@ const examService = {
         if (options.title) formData.append('title', options.title)
         if (options.subject) formData.append('subject', options.subject)
 
-        const response = await axios.post(`${API_BASE}/upload`, formData, {
+        return await api.post(`${API_BASE}/upload`, formData, {
             headers: { 'Content-Type': 'multipart/form-data' },
             onUploadProgress: (progressEvent) => {
                 if (onProgress && progressEvent.total) {
@@ -30,7 +30,6 @@ const examService = {
                 }
             }
         })
-        return response.data
     },
 
     /**
@@ -38,8 +37,7 @@ const examService = {
      * @param {Object} params - { year, subject }
      */
     async getExamList(params = {}) {
-        const response = await axios.get(API_BASE, { params })
-        return response.data
+        return await api.get(API_BASE, { params })
     },
 
     /**
@@ -47,8 +45,7 @@ const examService = {
      * @param {string} examId 
      */
     async getExamStatus(examId) {
-        const response = await axios.get(`${API_BASE}/${examId}/status`)
-        return response.data
+        return await api.get(`${API_BASE}/${examId}/status`)
     },
 
     /**
@@ -56,8 +53,7 @@ const examService = {
      * @param {string} examId 
      */
     async getExamDetail(examId) {
-        const response = await axios.get(`${API_BASE}/${examId}`)
-        return response.data
+        return await api.get(`${API_BASE}/${examId}`)
     },
 
     /**
@@ -65,8 +61,7 @@ const examService = {
      * @param {string} examId 
      */
     async getExamRaw(examId) {
-        const response = await axios.get(`${API_BASE}/${examId}/raw`)
-        return response.data
+        return await api.get(`${API_BASE}/${examId}/raw`)
     },
 
     /**
@@ -74,8 +69,7 @@ const examService = {
      * @param {string} examId 
      */
     async deleteExam(examId) {
-        const response = await axios.delete(`${API_BASE}/${examId}`)
-        return response.data
+        return await api.delete(`${API_BASE}/${examId}`)
     },
 
     /**
@@ -83,14 +77,12 @@ const examService = {
      * @param {string} examId 
      */
     async reparseExam(examId) {
-        const response = await axios.post(`${API_BASE}/${examId}/reparse`)
-        return response.data
+        return await api.post(`${API_BASE}/${examId}/reparse`)
     },
 
     /** 更新试卷年份（解析后用户可编辑） */
     async updateExamYear(examId, year) {
-        const response = await axios.patch(`${API_BASE}/${examId}/year`, { year })
-        return response.data
+        return await api.patch(`${API_BASE}/${examId}/year`, { year })
     }
 }
 

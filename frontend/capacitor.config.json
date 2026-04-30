@@ -1,0 +1,8 @@
+{
+  "appId": "com.firecracker.agentforexam",
+  "appName": "Agent For Exam",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "http"
+  }
+}

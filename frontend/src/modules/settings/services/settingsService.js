@@ -1,33 +1,27 @@
-import axios from 'axios'
+import { api } from '../../../services/api'
 
 const API_BASE = '/api/settings'
 
 export const settingsService = {
   async getLLMConfig() {
-    const response = await axios.get(`${API_BASE}/llm-config`)
-    return response.data
+    return await api.get(`${API_BASE}/llm-config`)
   },
 
   async updateLLMConfig(scene, config) {
-    const response = await axios.post(`${API_BASE}/llm-config/${scene}`, config)
-    return response.data
+    return await api.post(`${API_BASE}/llm-config/${scene}`, config)
   },
 
   async updateProviderAPIKey(binding, apiKey) {
-    const response = await axios.post(`${API_BASE}/providers/${binding}/api-key`, {
+    return await api.post(`${API_BASE}/providers/${binding}/api-key`, {
       api_key: apiKey
     })
-    return response.data
   },
 
   async refreshProviderModels(binding) {
-    const response = await axios.post(`${API_BASE}/providers/${binding}/models/refresh`)
-    return response.data
+    return await api.post(`${API_BASE}/providers/${binding}/models/refresh`)
   },
 
   async getModelLists() {
-    const response = await axios.get(`${API_BASE}/model-lists`)
-    return response.data
+    return await api.get(`${API_BASE}/model-lists`)
   }
 }
-

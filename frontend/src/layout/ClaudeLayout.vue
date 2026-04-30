@@ -1,7 +1,21 @@
 <template>
-  <div class="claude-layout" :style="{ '--sidebar-width': isCollapsed ? '48px' : '260px' }">
+  <div class="claude-layout" :style="layoutStyle">
+    <button
+      v-if="isMobile && !mobileNavOpen"
+      class="mobile-menu-btn"
+      type="button"
+      @click="mobileNavOpen = true"
+      title="打开导航"
+    >
+      <el-icon><Collection /></el-icon>
+    </button>
+    <div
+      v-if="isMobile && mobileNavOpen"
+      class="mobile-sidebar-backdrop"
+      @click="mobileNavOpen = false"
+    ></div>
     <!-- 侧边栏 -->
-    <aside class="sidebar" :class="{ collapsed: isCollapsed }">
+    <aside class="sidebar" :class="{ collapsed: isCollapsed, 'mobile-open': mobileNavOpen }">
       <div class="sidebar-header">
         <div class="logo-area" v-show="!isCollapsed">
           <h1 class="app-title">Agent For Exam</h1>
@@ -10,7 +24,7 @@
           <el-icon></el-icon>
           HOME PAGE
         </el-button>
-        <button class="collapse-btn" @click="toggleCollapse" :title="isCollapsed ? '展开侧边栏' : '折叠侧边栏'">
+        <button class="collapse-btn" @click="isMobile ? (mobileNavOpen = false) : toggleCollapse()" :title="isMobile ? '关闭导航' : (isCollapsed ? '展开侧边栏' : '折叠侧边栏')">
           <el-icon>
             <component :is="isCollapsed ? 'ArrowRight' : 'ArrowLeft'" />
           </el-icon>
@@ -123,7 +137,7 @@
 </template>
 
 <script setup>
-import { ref, watch, computed, onMounted } from 'vue'
+import { ref, watch, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { Collection, ArrowLeft, ArrowRight, ArrowDown, MoreFilled, DataAnalysis } from '@element-plus/icons-vue'
@@ -133,6 +147,8 @@ import { useConversationStore } from '../modules/chat/store/conversationStore'
 const router = useRouter()
 const route = useRoute()
 const isCollapsed = ref(false)
+const isMobile = ref(false)
+const mobileNavOpen = ref(false)
 
 const subjectStore = useSubjectStore()
 const conversationStore = useConversationStore()
@@ -144,8 +160,12 @@ const subjects = computed(() => subjectStore.subjects || [])
 const currentSubjectId = computed(() => subjectStore.currentSubjectId)
 const currentConversationId = computed(() => conversationStore.currentConversationId)
 const getConversationsBySubject = computed(() => conversationStore.getConversationsBySubject)
+const layoutStyle = computed(() => ({
+  '--sidebar-width': isMobile.value ? '0px' : (isCollapsed.value ? '48px' : '260px')
+}))
 
 const goHome = () => {
+  mobileNavOpen.value = false
   router.push('/')
 }
 
@@ -168,6 +188,7 @@ const enterSubject = (subjectId) => {
   subjectStore.selectSubject(subjectId)
   expandedSubjects.value.add(subjectId)
   expandedSubjects.value = new Set(expandedSubjects.value)
+  mobileNavOpen.value = false
   router.push(`/subject/${subjectId}`)
 }
 
@@ -176,6 +197,7 @@ const enterConversation = (subjectId, conversationId) => {
   conversationStore.selectConversation(conversationId)
   expandedSubjects.value.add(subjectId)
   expandedSubjects.value = new Set(expandedSubjects.value)
+  mobileNavOpen.value = false
   router.push(`/subject/${subjectId}/chat/${conversationId}`)
 }
 
@@ -226,17 +248,33 @@ const deleteConversation = (subjectId, conv) => {
 }
 
 // 动态设置全局CSS变量，供ChatView使用
-watch(isCollapsed, (collapsed) => {
-  document.documentElement.style.setProperty('--sidebar-width', collapsed ? '48px' : '260px')
+watch([isCollapsed, isMobile], ([collapsed, mobile]) => {
+  document.documentElement.style.setProperty('--sidebar-width', mobile ? '0px' : (collapsed ? '48px' : '260px'))
 }, { immediate: true })
 
+let mobileMediaQuery = null
+const updateMobileState = (event) => {
+  isMobile.value = event.matches
+  if (!event.matches) {
+    mobileNavOpen.value = false
+  }
+}
+
 onMounted(async () => {
+  mobileMediaQuery = window.matchMedia('(max-width: 768px)')
+  updateMobileState(mobileMediaQuery)
+  mobileMediaQuery.addEventListener('change', updateMobileState)
+
   if (!subjectStore.subjects.length) {
     await subjectStore.loadSubjects()
   }
   if (!conversationStore.conversations.length) {
     await conversationStore.loadConversations()
   }
+})
+
+onUnmounted(() => {
+  mobileMediaQuery?.removeEventListener('change', updateMobileState)
 })
 
 // 根据当前路由自动选中 subject / conversation
@@ -262,9 +300,15 @@ watch(
 .claude-layout {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
   background-color: var(--bg-app);
   overflow: hidden;
+}
+
+.mobile-menu-btn,
+.mobile-sidebar-backdrop {
+  display: none;
 }
 
 /* Sidebar Styles */
@@ -583,5 +627,89 @@ watch(
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+@media (max-width: 768px) {
+  .claude-layout {
+    position: relative;
+  }
+
+  .mobile-menu-btn {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 10px);
+    left: 12px;
+    z-index: 1300;
+    width: 42px;
+    height: 42px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    background-color: rgba(255, 255, 255, 0.94);
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 8px 22px rgba(15, 23, 42, 0.14);
+  }
+
+  .mobile-menu-btn .el-icon {
+    font-size: 20px;
+  }
+
+  .mobile-sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1180;
+    display: block;
+    background: rgba(15, 23, 42, 0.36);
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 1200;
+    width: min(84vw, 320px);
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: 12px 0 28px rgba(15, 23, 42, 0.18);
+  }
+
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  .sidebar.collapsed {
+    width: min(84vw, 320px);
+  }
+
+  .sidebar.collapsed .logo-area,
+  .sidebar.collapsed .new-chat-btn,
+  .sidebar.collapsed .sidebar-nav,
+  .sidebar.collapsed .sidebar-footer {
+    display: flex !important;
+  }
+
+  .sidebar.collapsed .sidebar-nav,
+  .sidebar.collapsed .sidebar-footer {
+    display: block !important;
+  }
+
+  .sidebar.collapsed .collapse-btn {
+    right: 16px;
+    top: 20px;
+  }
+
+  .main-content {
+    width: 100vw;
+    overflow: hidden;
+  }
+
+  .content-wrapper {
+    max-width: none;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+  }
 }
 </style>
