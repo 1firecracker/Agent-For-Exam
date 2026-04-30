@@ -3,6 +3,7 @@
     v-model="dialogVisible"
     title="LLM 配置设置"
     width="800px"
+    class="settings-llm-dialog"
     :before-close="handleClose"
   >
     <section class="provider-panel">
@@ -249,5 +250,50 @@ onMounted(() => {
   font-size: 12px;
   margin: -4px 0 8px 120px;
   word-break: break-word;
+}
+
+@media (max-width: 768px) {
+  .provider-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .provider-panel {
+    padding: 12px;
+  }
+  .sync-error {
+    margin-left: 0;
+  }
+  .sync-status {
+    margin-left: 0;
+    display: block;
+    margin-top: 4px;
+  }
+}
+</style>
+
+<style>
+@media (max-width: 768px) {
+  .settings-llm-dialog {
+    width: 95% !important;
+    max-width: 95vw !important;
+    margin: 5vh auto !important;
+  }
+
+  .settings-llm-dialog .el-form-item {
+    display: block;
+    margin-bottom: 18px;
+  }
+  .settings-llm-dialog .el-form-item__label {
+    width: auto !important;
+    text-align: left;
+    padding: 0 0 4px 0;
+    line-height: 1.4;
+    height: auto;
+    float: none;
+  }
+  .settings-llm-dialog .el-form-item__content {
+    margin-left: 0 !important;
+  }
 }
 </style>

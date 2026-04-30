@@ -566,7 +566,7 @@ watch(() => props.currentSlideNumber, (newNumber) => {
 
   .slide-item {
     padding: 6px 0;
-    touch-action: pan-y;
+    touch-action: pan-x pan-y pinch-zoom;
   }
 
   .slide-image {
