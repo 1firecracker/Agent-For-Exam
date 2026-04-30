@@ -269,22 +269,17 @@ onMounted(() => {
     display: block;
     margin-top: 4px;
   }
-}
-</style>
 
-<style>
-@media (max-width: 768px) {
   .settings-llm-dialog {
     width: 95% !important;
     max-width: 95vw !important;
     margin: 5vh auto !important;
   }
-
-  .settings-llm-dialog .el-form-item {
+  .settings-llm-dialog :deep(.el-form-item) {
     display: block;
     margin-bottom: 18px;
   }
-  .settings-llm-dialog .el-form-item__label {
+  .settings-llm-dialog :deep(.el-form-item__label) {
     width: auto !important;
     text-align: left;
     padding: 0 0 4px 0;
@@ -292,7 +287,7 @@ onMounted(() => {
     height: auto;
     float: none;
   }
-  .settings-llm-dialog .el-form-item__content {
+  .settings-llm-dialog :deep(.el-form-item__content) {
     margin-left: 0 !important;
   }
 }
