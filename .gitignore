@@ -60,6 +60,7 @@ lerna-debug.log*
 frontend/dist/
 frontend/.vite/
 frontend/dist-ssr/
+frontend/android/
 *.local
 
 # 前端文档规划（忽略）

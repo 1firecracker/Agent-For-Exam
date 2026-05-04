@@ -48,7 +48,7 @@ async def read_handler(
 ) -> Dict[str, Any]:
     """
     读取指定文档的起止页码范围内的文本内容。
-    文档名需与当前对话/知识库中的文件名一致（可用 list_documents 查看）。
+    文档名需与当前对话/知识库中的文件名一致。
     页码为 1-based，含起始页和终止页。
     """
     try:
@@ -86,7 +86,7 @@ async def read_handler(
         if not file_id:
             return {
                 "status": "error",
-                "message": f"未找到文档「{filename_clean}」。请先调用 list_documents 查看当前文档列表及准确文件名。",
+                "message": f"未找到文档「{filename_clean}」。请根据自动注入的文档清单确认准确文件名。",
             }
 
         content = _load_page_content(context_id, is_subject, file_id, start_page, end_page)
@@ -115,10 +115,10 @@ from app.services.agent.tool_registry import ToolDefinition, ToolParameter
 
 READ_TOOL = ToolDefinition(
     name="read",
-    description="按文档名和起止页码读取讲义/教材的纯文本内容。文档名必须与当前对话中的文件名完全一致（可通过 list_documents 查看）。页码从 1 开始，包含起始页和终止页。",
+    description="按文档名和起止页码读取讲义/教材的纯文本内容。文档名必须与自动注入文档清单中的文件名完全一致。页码从 1 开始，包含起始页和终止页。",
     parameters={
         "conversation_id": ToolParameter(type="string", description="对话ID", required=True),
-        "filename": ToolParameter(type="string", description="文档名（与 list_documents 返回的 filename 一致）", required=True),
+        "filename": ToolParameter(type="string", description="文档名（与自动注入文档清单中的 filename 一致）", required=True),
         "start_page": ToolParameter(type="number", description="起始页码（1-based，含）", required=True),
         "end_page": ToolParameter(type="number", description="终止页码（1-based，含）", required=True),
     },

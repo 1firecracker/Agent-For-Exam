@@ -295,7 +295,7 @@ MINDMAP_TOOL = ToolDefinition(
         ),
         "document_ids": ToolParameter(
             type="array",
-            description="要生成思维导图的文档ID列表（可选，如果不提供则生成所有文档）。**重要：必须使用 file_id（文档ID），而不是 filename（文件名）, 若不提供file_id 参数 则用全部文档生成**。可以通过 list_documents 工具获取每个文档的 file_id。",
+            description="要生成思维导图的文档ID列表（可选，如果不提供则生成所有文档）。**重要：必须使用自动注入文档清单中的 file_id（文档ID），而不是 filename（文件名）；若不提供 document_ids 参数，则用全部文档生成**。",
             required=False,
             items={
                 "type": "string"
@@ -306,4 +306,3 @@ MINDMAP_TOOL = ToolDefinition(
     category="mindmap",
     rate_limit=5  # 每分钟最多5次
 )
-

@@ -414,7 +414,7 @@ class SkillManager:
         
         return self._registry.get(skill_name)
     
-    def get_system_prompt_snippet(self) -> str:
+    def get_system_prompt_snippet(self, excluded_skills: Optional[set[str]] = None) -> str:
         """生成 System Prompt 中的技能列表片段
         
         用于在 System Prompt 中列出所有可用技能的简要描述，
@@ -438,8 +438,18 @@ class SkillManager:
         if not self._registry:
             return "No skills available."
         
+        excluded_skills = excluded_skills or set()
+        visible_skills = {
+            skill_name: metadata
+            for skill_name, metadata in self._registry.items()
+            if skill_name not in excluded_skills
+        }
+
+        if not visible_skills:
+            return "No skills available."
+
         lines = ["Available Skills:"]
-        for skill_name, metadata in sorted(self._registry.items()):
+        for skill_name, metadata in sorted(visible_skills.items()):
             lines.append(f"- {skill_name}: {metadata.description}")
         
         return "\n".join(lines)
